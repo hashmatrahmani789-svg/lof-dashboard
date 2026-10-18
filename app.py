@@ -289,6 +289,7 @@ with st.sidebar:
         min_rr = st.number_input("Min R:R", 0.5, 10.0, 2.0, 0.1)
         min_score = st.slider("Min score (of 9)", 1, 9, 7)
     manual = st.checkbox("✅ Liquidations / footprint confirm (manual)")
+    live_on = st.toggle("🔴 Live chart (updates every 20 s)", value=True, key="live_on")
     cg_override = st.text_input("CoinGecko ID override (optional)",
                                 help="If coin info is wrong, enter the CoinGecko ID, e.g. 'pepe'.")
     if st.button("🔄 Refresh now", width="stretch"):
@@ -1181,6 +1182,36 @@ DRAW_JS = r"""
     ps.setVisibleRange({ from: mid - half, to: mid + half });
   }, { capture: true, passive: false });
 })();
+
+// ── Live updates (from the hidden live feed) + remember zoom / scroll per coin & timeframe
+(function () {
+  const n0 = D.candles.length;
+  const key = 'lof_view_' + D.coin + '_' + D.tf;
+  try {
+    const sv = JSON.parse(localStorage.getItem(key) || 'null');
+    if (sv && Date.now() - sv.ts < 6 * 3600e3) {
+      chart.timeScale().setVisibleLogicalRange({ from: n0 - sv.r1, to: n0 - sv.r2 });
+    }
+  } catch (e) {}
+  let last = D.candles.length ? D.candles[D.candles.length - 1].time : 0;
+  chart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+    if (!r) return;
+    const n = D.candles.length;
+    try { localStorage.setItem(key, JSON.stringify({ r1: n - r.from, r2: n - r.to, ts: Date.now() })); } catch (e) {}
+  });
+  window.addEventListener('message', e => {
+    const m = e.data;
+    if (!m || m.type !== 'lof-live' || m.coin !== D.coin || m.tf !== D.tf) return;
+    (m.candles || []).forEach(c => {
+      if (c.time < last) return;
+      try { cs.update(T([c])[0]); } catch (err) { return; }
+      if (c.time > last) { D.candles.push(c); last = c.time; }
+      else { D.candles[D.candles.length - 1] = c; }
+    });
+    const badge = document.getElementById('live');
+    if (badge) { badge.textContent = '● LIVE ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); badge.style.opacity = 1; }
+  });
+})();
 """
 
 
@@ -1219,6 +1250,7 @@ def tv_chart(px, panes_data, levels, prec, height, coin_name, vol=None, show_vp=
 </style>
 <div id="wrap">
   <button id="fs" title="Full screen (Esc to exit)">⛶ Full screen</button>
+  <div id="live" style="position:absolute;top:12px;right:80px;z-index:10;font:11px sans-serif;color:#26a69a;opacity:.0"></div>
   <div id="hint"></div>
   <div id="tools">
     <button data-tool="h" title="Horizontal line">─</button>
@@ -1402,7 +1434,7 @@ def chart_section():
                               ("TP1", r["tp1"], GREEN), ("TP2", r["tp2"], GREEN)):
             if not nan(v):
                 plan.append({"title": title, "price": float(v), "color": col})
-    extra = {"opens": opens, "plan": plan, "impulseMult": IMPULSE[imp], "asia": r["asia"], "profiles": r["profiles"],
+    extra = {"tf": tf_label, "opens": opens, "plan": plan, "impulseMult": IMPULSE[imp], "asia": r["asia"], "profiles": r["profiles"],
              "layers": {"asia": "Asia range" in zones, "sessions": "Sessions" in zones,
                         "ema12": "EMA 12" in lines, "ema21": "EMA 21" in lines, "ema50": "EMA 50" in lines,
                         "impulse": "Impulse candles" in lines,
@@ -1414,6 +1446,39 @@ def chart_section():
 
 
 chart_section()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def live_tail(key, sym, interval, tradfi):
+    """Last few candles of the chart symbol (1 Coinalyze call, or Yahoo for TradFi)."""
+    if tradfi:
+        df = E.yf_bars(sym, interval, 3)
+    else:
+        df = E.fetch_history("ohlcv-history", key, [sym], interval, E.INTERVAL_SECONDS[interval] * 3).get(sym)
+    if df is None or df.empty:
+        return []
+    return [{"time": int(t.timestamp()), "open": float(o), "high": float(h), "low": float(l), "close": float(c)}
+            for t, o, h, l, c in zip(df["t"], df["o"], df["h"], df["l"], df["c"])]
+
+
+@st.fragment(run_every=20)
+def live_feed():
+    if not st.session_state.get("live_on", True):
+        return
+    tf = st.session_state.get("chart_tf") or ltf_label
+    try:
+        candles = live_tail(api_key, perp_syms[0], E.CHART_TF[tf], is_tradfi)
+    except Exception:
+        return
+    msg = json.dumps({"type": "lof-live", "coin": coin, "tf": tf, "candles": candles})
+    components.html(f"""<script>
+const m = {msg};
+const fr = window.parent.frames;
+for (let i = 0; i < fr.length; i++) {{ try {{ fr[i].postMessage(m, '*'); }} catch (e) {{}} }}
+</script>""", height=0)
+
+
+live_feed()
 
 if not is_tradfi:
     t3, t4 = st.tabs(["Liquidations 24h", "Per exchange"])
