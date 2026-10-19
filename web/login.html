@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOF Dashboard · Sign in</title>
+<meta name="theme-color" content="#0b0e14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.json">
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0e14; color: #d7dae0; font: 14px Inter, 'Segoe UI', system-ui, sans-serif; }
+  .box { max-width: 340px; margin: 18vh auto 0; padding: 28px; background: #11151e; border: 1px solid #222838; border-radius: 14px; }
+  h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: 0.04em; }
+  p { margin: 0 0 18px; color: #8b90a0; }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; background: #161b26; border: 1px solid #2c3344; border-radius: 8px; color: #d7dae0; font: inherit; outline: none; }
+  input:focus { border-color: #2962ff; }
+  button { width: 100%; margin-top: 12px; padding: 10px; background: #2962ff; border: none; border-radius: 8px; color: #fff; font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .err { color: #ef5350; margin-top: 10px; display: none; }
+</style>
+</head>
+<body>
+<form class="box" method="post" action="/api/login">
+  <h1>LOF</h1>
+  <p>Liquidity–Order Flow Confluence</p>
+  <input type="password" name="password" placeholder="Password" autofocus autocomplete="current-password">
+  <button type="submit">Sign in</button>
+  <div class="err" id="err">Wrong password.</div>
+</form>
+<script>if (location.search.includes('wrong')) document.getElementById('err').style.display = 'block';</script>
+</body>
+</html>

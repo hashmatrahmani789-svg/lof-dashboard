@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LOF Dashboard</title>
+<meta name="theme-color" content="#0b0e14">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="preconnect" href="https://fapi.binance.com">
+</head>
+<body>
+<header class="top">
+  <div class="brand">LOF<span>Confluence</span></div>
+  <div class="search">
+    <input id="q" placeholder="Search coin or market" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+    <div id="qres" class="dropdown"></div>
+  </div>
+  <div id="quick" class="quick"></div>
+  <div class="hdr-right">
+    <div id="kz" class="kz" title="Killzones (New York time): London 02:00–05:00 · New York 07:00–10:00 · Asia 20:00–00:00"></div>
+    <div id="news" class="kz news" title="Next high-impact USD news (Forex Factory)"></div>
+    <div id="status" class="status"><span class="dot"></span><span class="txt">Starting</span><div class="tip"></div></div>
+    <button id="btnSettings" class="icon-btn" title="Settings">⚙</button>
+  </div>
+</header>
+
+<main class="grid">
+  <section class="left">
+    <div id="hero" class="hero"></div>
+    <div id="overview" class="tiles"></div>
+
+    <div class="card chart-card">
+      <div class="chart-bar">
+        <div id="tfs" class="seg"></div>
+        <div class="menu" id="mPanes"><button class="btn">Panes ▾</button><div class="pop"></div></div>
+        <div class="menu" id="mLayers"><button class="btn">Layers ▾</button><div class="pop"></div></div>
+        <span class="sp"></span>
+        <div id="sizes" class="seg" title="Chart size"></div>
+      </div>
+      <div id="chart" class="chart-host"><div class="loading">Loading chart…</div></div>
+      <div id="chartFoot" class="chart-foot"></div>
+    </div>
+
+    <div class="card" id="flowCard">
+      <h3>Derivatives &amp; order flow <span id="flowSrc" class="src"></span></h3>
+      <div id="flow" class="tiles"></div>
+      <div id="notes"></div>
+    </div>
+
+    <div class="card" id="tabsCard">
+      <div class="tabs" id="tabs">
+        <button data-tab="screener" class="on">Screener</button>
+        <button data-tab="pulse">Market Pulse</button>
+        <button data-tab="history">Setup history</button>
+        <button data-tab="markets">Data sources</button>
+      </div>
+      <div id="tab-screener"></div>
+      <div id="tab-pulse" hidden></div>
+      <div id="tab-history" hidden></div>
+      <div id="tab-markets" hidden></div>
+    </div>
+  </section>
+
+  <aside class="right">
+    <div id="plan" class="card"></div>
+    <div id="checklist" class="card"></div>
+    <div id="bias" class="card"></div>
+    <div id="levels" class="card"></div>
+  </aside>
+</main>
+
+<div id="drawer" class="drawer"></div>
+<div id="toast" class="toast"></div>
+
+<script src="/js/lwc.js"></script>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

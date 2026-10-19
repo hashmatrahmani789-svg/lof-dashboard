@@ -1,0 +1,6 @@
+{
+  "name": "lof-web",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" }
+}

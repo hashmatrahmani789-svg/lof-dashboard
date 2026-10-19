@@ -1,0 +1,618 @@
+// LOF Dashboard — main app.
+import * as API from './data.js';
+import { analyze, perfFromDaily, isNum } from './engine.js';
+import { buildChart, abbr } from './chart.js';
+import * as UI from './ui.js';
+import * as X from './extras.js';
+
+const { $, esc, toast } = UI;
+
+// ── settings ────────────────────────────────────────────────
+const OPENS = [['Daily open', 'd_open', '#e0e0e0'], ['NY midnight', 'ny_mid', '#00bcd4'], ['London open', 'ldn_open', '#5b7fff'],
+  ['NY open', 'ny_open', '#ff9800'], ['Weekly open', 'w_open', '#ce93d8'], ['Monthly open', 'm_open', '#8d6e63']];
+const LINE_LAYERS = ['EMA 12', 'EMA 21', 'EMA 50', 'Impulse candles', 'Volume MA', 'Levels', ...OPENS.map(o => o[0]), 'Trade plan'];
+const ZONE_LAYERS = ['Asia range', 'Sessions', 'VP prev day', 'VP prev week', 'VP visible range'];
+const PANES = [['oi', 'OI'], ['perp', 'Perp CVD'], ['spot', 'Spot CVD'], ['cvd2', 'Perp vs spot CVD'], ['vol', 'Volume'],
+  ['liq', 'Liquidations'], ['cbp', 'Coinbase premium']];
+const SIZES = { S: 380, M: 520, L: 700, XL: 900 };
+const IMPULSE = { Strict: 2.5, Normal: 2.0, Loose: 1.5 };
+const TFS = ['5m', '15m', '30m', '1h', '2h', '4h', '12h', '1D'];
+const DEFAULTS = {
+  asset: 'BTC', ltf: '15m', tf: '15m',
+  lines: ['EMA 12', 'EMA 21', 'EMA 50', 'Impulse candles', 'Volume MA', 'Levels', 'Daily open', 'NY midnight', 'London open', 'NY open', 'Weekly open', 'Trade plan'],
+  zones: ['Asia range', 'Sessions', 'VP prev day', 'VP prev week'],
+  panes: ['oi', 'cvd2', 'vol'], size: 'M', impulse: 'Normal',
+  watch: ['BTC', 'ETH', 'SOL', 'GOLD', 'SILVER', 'SPX', 'NDX'],
+  params: { piv: 3, valid: 20, minRR: 2, minScore: 7 },
+  alerts: { browser: false, telegram: false }, cgId: {},
+};
+const CFG_KEY = 'lof_cfg_v2';
+let cfg;
+try { cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { cfg = Object.assign({}, DEFAULTS); }
+cfg.params = Object.assign({}, DEFAULTS.params, cfg.params);
+cfg.alerts = Object.assign({}, DEFAULTS.alerts, cfg.alerts);
+const saveCfg = () => { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* ignore */ } };
+
+// ── state ───────────────────────────────────────────────────
+const S = {
+  symbols: [], byBase: {}, gen: 0, timers: [], chartTimers: [], chart: null, ws: null,
+  asset: null, tradfi: false, sym: '', base: '', ticker: '', prec: 2, title: '', sub: '',
+  bars: {}, chartBars: [], flow: null, flowChart: null, cbp: null, cbOk: null, r: null, ov: undefined, chg24: NaN, perf: null,
+  manual: false, wsState: 'starting', lastTick: 0, priceErr: null, server: null, scan: [], scanAt: 0, alerted: {},
+};
+try { S.alerted = JSON.parse(localStorage.getItem('lof_alerted') || '{}'); } catch (e) { S.alerted = {}; }
+const st = () => ({ tradfi: S.tradfi, title: S.title, sub: S.sub, price: S.r ? S.r.price : (S.chartBars.length ? S.chartBars[S.chartBars.length - 1].c : NaN),
+  prec: S.prec, chg24: S.chg24, ltf: cfg.ltf, params: Object.assign({}, cfg.params, { manual: S.manual }), perf: S.perf,
+  sym: S.sym, base: S.base, ticker: S.ticker });
+const every = (fn, ms, list = S.timers) => list.push(setInterval(fn, ms));
+const clearTimers = list => { list.forEach(clearInterval); list.length = 0; };
+const isCryptoKey = k => !API.TRADFI[k] && !!S.byBase[k];
+
+// ── search ──────────────────────────────────────────────────
+function allAssets() {
+  return Object.keys(API.TRADFI).map(k => ({ key: k, label: API.TRADFI[k].name, kind: 'Macro / futures' }))
+    .concat(S.symbols.map(s => ({ key: s.base, label: s.sym, kind: 'Binance perp' })));
+}
+let qSel = 0, qItems = [];
+function renderSearch() {
+  const v = $('#q').value.trim().toUpperCase(), box = $('#qres');
+  if (!v) { box.classList.remove('open'); return; }
+  const seen = new Set();
+  qItems = allAssets().filter(a => {
+    if (seen.has(a.key)) return false;
+    const ok = a.key.startsWith(v) || a.key.replace(/^1000+/, '').startsWith(v) || a.label.toUpperCase().includes(v);
+    if (ok) seen.add(a.key); return ok;
+  }).sort((a, b) => (a.key === v ? -1 : 0) - (b.key === v ? -1 : 0) || a.key.length - b.key.length).slice(0, 30);
+  qSel = Math.min(qSel, Math.max(0, qItems.length - 1));
+  box.innerHTML = qItems.length ? qItems.map((a, i) => `<div class="it ${i === qSel ? 'sel' : ''}" data-k="${esc(a.key)}"><span><b>${esc(a.key)}</b> <small>${esc(a.label)}</small></span><small>${a.kind}</small></div>`).join('')
+    : '<div class="it"><small>No match</small></div>';
+  box.classList.add('open');
+  box.querySelectorAll('[data-k]').forEach(d => d.onmousedown = e => { e.preventDefault(); pick(d.dataset.k); });
+}
+function pick(k) { $('#q').value = ''; $('#qres').classList.remove('open'); $('#q').blur(); loadAsset(k); }
+$('#q').addEventListener('input', () => { qSel = 0; renderSearch(); });
+$('#q').addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown') { qSel = Math.min(qSel + 1, qItems.length - 1); renderSearch(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { qSel = Math.max(qSel - 1, 0); renderSearch(); e.preventDefault(); }
+  else if (e.key === 'Enter' && qItems[qSel]) pick(qItems[qSel].key);
+  else if (e.key === 'Escape') { $('#q').value = ''; renderSearch(); $('#q').blur(); }
+});
+$('#q').addEventListener('blur', () => setTimeout(() => $('#qres').classList.remove('open'), 150));
+
+// hotkeys: / search · 1–8 timeframe · F full screen
+window.addEventListener('keydown', e => {
+  if (/INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === '/') { e.preventDefault(); $('#q').focus(); }
+  else if (/^[1-8]$/.test(e.key)) setTf(TFS[+e.key - 1]);
+  else if (e.key === 'f' || e.key === 'F') { if (S.chart) S.chart.fullscreen(); }
+});
+
+// ── quick chips (watchlist) ─────────────────────────────────
+function renderQuick() {
+  const byKey = Object.fromEntries(S.scan.map(x => [x.key, x]));
+  $('#quick').innerHTML = cfg.watch.map(k => {
+    const x = byKey[k], c = x ? x.chg24 : NaN, dot = x && x.r.decision !== 'WAIT' ? (x.r.decision === 'LONG' ? '🟢 ' : '🔴 ') : '';
+    return `<span class="chip ${k === S.asset ? 'on' : ''}" data-k="${esc(k)}">${dot}${esc(API.TRADFI[k] ? API.TRADFI[k].short : k)}${isNum(c) ? `<span class="d ${UI.tone(c)}">${UI.fpct(c, 1)}</span>` : ''}</span>`;
+  }).join('');
+  $('#quick').querySelectorAll('[data-k]').forEach(el => el.onclick = () => loadAsset(el.dataset.k));
+}
+
+// ── status light ────────────────────────────────────────────
+function updateStatus() {
+  const now = Date.now() / 1000, el = $('#status'), dot = el.querySelector('.dot'), txt = el.querySelector('.txt');
+  const tickAge = S.lastTick ? now - S.lastTick : Infinity;
+  const flowAge = S.flow && !S.flow.error ? now - S.flow.at : Infinity;
+  let c = 'g', label = 'Live';
+  if (S.priceErr) { c = 'r'; label = 'Price error'; }
+  else if (S.tradfi) { c = tickAge < 120 ? 'g' : 'y'; label = tickAge < 120 ? 'Updated' : 'Stale'; }
+  else if (S.wsState !== 'live') { c = 'y'; label = S.wsState === 'reconnecting' ? 'Reconnecting' : 'Connecting'; }
+  else if (S.flow && S.flow.error) { c = 'y'; label = 'Flow error'; }
+  else if (flowAge > 240) { c = 'y'; label = S.flow ? 'Flow stale' : 'Loading flow'; }
+  dot.className = 'dot ' + c; txt.textContent = label;
+  const lines = [];
+  lines.push(S.tradfi ? `<b>Price:</b> Yahoo Finance (${esc(S.ticker)}) · polled every 30s · last update ${UI.ago(tickAge)} ago`
+    : `<b>Price:</b> Binance futures websocket · ${S.wsState} · last trade ${UI.ago(tickAge)} ago`);
+  if (S.priceErr) lines.push(`<span class="dn">${esc(S.priceErr)}</span>`);
+  if (!S.tradfi) lines.push(S.flow && S.flow.error ? `<b>Order flow:</b> <span class="dn">${esc(S.flow.error)}</span>` :
+    `<b>Order flow:</b> Coinalyze · updated ${UI.ago(flowAge)} ago · refreshes every 60s${S.flow && S.flow.calls != null ? ` · calls ${S.flow.calls}/40 per min` : ''}`);
+  lines.push(`<b>Screener:</b> ${S.scanAt ? 'scanned ' + UI.ago(now - S.scanAt) + ' ago' : 'starting'} · every 3 min`);
+  if (S.server) lines.push(`<b>Telegram:</b> ${S.server.telegram ? 'set up' : 'not set up'} · <b>Notion:</b> ${S.server.notion ? 'set up' : 'not set up'}`);
+  el.querySelector('.tip').innerHTML = lines.join('<br>');
+}
+
+// ── chart building ──────────────────────────────────────────
+function overlays(r) {
+  if (!r) return { opens: [], plan: [], levels: [], asia: null, profiles: {} };
+  const lines = cfg.lines;
+  const opens = OPENS.filter(([n, k]) => lines.includes(n) && r.opens[k]).map(([n, k, c]) => ({ title: n, price: r.opens[k].price, time: r.opens[k].time, color: c }));
+  const levels = !lines.includes('Levels') ? [] : [['pwh', '#ef5350', 'PWH'], ['pdh', '#ef5350', 'PDH'], ['pd_poc', '#f9a825', 'D POC'],
+    ['pw_poc', '#ab47bc', 'W POC'], ['pdl', '#26a69a', 'PDL'], ['pwl', '#26a69a', 'PWL']]
+    .filter(([k]) => isNum(r.levels[k])).map(([k, c, t]) => ({ price: r.levels[k], color: c, title: t }));
+  const plan = !lines.includes('Trade plan') || r.setup === 'NONE' ? [] :
+    [['Entry', r.price, '#d1d4dc'], ['SL', r.sl, '#ef5350'], ['TP1', r.tp1, '#26a69a'], ['TP2', r.tp2, '#26a69a']]
+      .filter(x => isNum(x[1])).map(([t, p, c]) => ({ title: t, price: p, color: c }));
+  return { opens, plan, levels, asia: r.asia, profiles: r.profiles };
+}
+
+function chartPanes() {
+  const keys = S.tradfi ? cfg.panes.filter(k => k === 'vol') : cfg.panes;
+  const out = [];
+  PANES.forEach(([k, name]) => {
+    if (!keys.includes(k)) return;
+    if (k === 'oi') out.push({ key: k, series: [{ kind: 'candle', name: 'OI (USD)', color: '#f9a825', data: [] }] });
+    if (k === 'perp') out.push({ key: k, series: [{ kind: 'line', name: 'Perp CVD', color: '#ef5350', data: [], cvd: true }] });
+    if (k === 'spot') out.push({ key: k, series: [{ kind: 'line', name: 'Spot CVD', color: '#26a69a', data: [], cvd: true }] });
+    if (k === 'cvd2') out.push({ key: k, series: [{ kind: 'line', name: 'Perp CVD', color: '#ef5350', data: [], cvd: true },
+      { kind: 'line', name: 'Spot CVD', color: '#26a69a', data: [], cvd: true, scale: 'spotcvd' }] });
+    if (k === 'vol') {
+      const s = [{ kind: 'hist', name: S.tradfi ? 'Volume' : 'Volume (USD)', color: '#787b86', data: [] }];
+      if (cfg.lines.includes('Volume MA')) s.push({ kind: 'line', name: 'Vol MA 20', color: '#f9a825', data: [] });
+      out.push({ key: k, series: s });
+    }
+    if (k === 'liq') out.push({ key: k, series: [{ kind: 'hist', name: 'Long liqs', color: '#ef5350', data: [] }, { kind: 'hist', name: 'Short liqs', color: '#26a69a', data: [] }] });
+    if (k === 'cbp') out.push({ key: k, series: [{ kind: 'hist', name: 'Coinbase premium %', color: '#f9a825', data: [], fmt: v => v.toFixed(3) + '%', minMove: 0.001 }] });
+  });
+  return out;
+}
+
+function fillPanes() {
+  const ch = S.chart; if (!ch) return;
+  const bars = S.chartBars, t0 = bars.length ? bars[0].t : 0;
+  if (ch.hasPane('vol')) {
+    const v = bars.map(b => ({ time: b.t, value: b.v || 0, color: b.c >= b.o ? 'rgba(38,166,154,0.55)' : 'rgba(239,83,80,0.55)' }));
+    ch.setPane('vol', 0, v);
+    const ma = [];
+    for (let i = 19; i < v.length; i++) { let s = 0; for (let j = i - 19; j <= i; j++) s += v[j].value; ma.push({ time: v[i].time, value: s / 20 }); }
+    ch.setPane('vol', 1, ma);
+  }
+  const f = S.flowChart;
+  if (f && !f.error) {
+    const after = rows => (rows || []).filter(r => r[0] >= t0);
+    ch.setPane('oi', 0, after(f.oi).map(r => ({ time: r[0], open: r[1], high: r[2], low: r[3], close: r[4] })));
+    const perp = after(f.perp).map(r => ({ time: r[0], value: r[1] })), spot = after(f.spot).map(r => ({ time: r[0], value: r[1] }));
+    ch.setPane('perp', 0, perp); ch.setPane('spot', 0, spot); ch.setPane('cvd2', 0, perp); ch.setPane('cvd2', 1, spot);
+    if (f.liq) {
+      ch.setPane('liq', 0, after(f.liq).map(r => ({ time: r[0], value: -r[1], color: '#ef5350' })));
+      ch.setPane('liq', 1, after(f.liq).map(r => ({ time: r[0], value: r[2], color: '#26a69a' })));
+    }
+  }
+  if (S.cbp) ch.setPane('cbp', 0, S.cbp.filter(p => p.time >= t0).map(p => Object.assign({}, p, { color: p.value >= 0 ? '#26a69a' : '#ef5350' })));
+}
+
+function chartHeight(nPanes) {
+  const base = Math.min(SIZES[cfg.size] || 520, Math.max(320, window.innerHeight * (window.innerWidth < 700 ? 0.55 : 0.8)));
+  return Math.round(base + base * 0.3 * nPanes);
+}
+
+function buildChartNow() {
+  if (S.chart) { S.chart.destroy(); S.chart = null; }
+  const host = $('#chart');
+  if (!S.chartBars.length) { host.innerHTML = '<div class="loading">No price data for this timeframe.</div>'; return; }
+  const panes = chartPanes();
+  host.style.height = chartHeight(panes.length) + 'px';
+  const L = cfg.lines, Z = cfg.zones;
+  S.chart = buildChart(host, Object.assign({
+    coin: S.asset, tf: cfg.tf, prec: S.prec, source: S.tradfi ? 'Yahoo · ' + S.ticker : 'Binance · ' + S.sym,
+    candles: S.chartBars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })),
+    vol: S.chartBars.map(b => b.v || 0),
+    impulseMult: IMPULSE[cfg.impulse] || 2,
+    layers: { ema12: L.includes('EMA 12'), ema21: L.includes('EMA 21'), ema50: L.includes('EMA 50'), impulse: L.includes('Impulse candles'),
+      asia: Z.includes('Asia range'), sessions: Z.includes('Sessions'), vp_day: Z.includes('VP prev day'), vp_week: Z.includes('VP prev week'),
+      vp_visible: Z.includes('VP visible range') },
+    panes,
+  }, overlays(S.r)));
+  fillPanes();
+  $('#chartFoot').innerHTML = S.tradfi
+    ? `Yahoo Finance · ${esc(S.ticker)} · updates every 30 s · scroll / + − to zoom · drag (also up/down) · wheel on price axis to stretch · double-click axis to reset · keys 1–8 timeframe, F full screen`
+    : `Binance ${esc(S.sym)} perpetual · live · OI / CVD / liquidations: Coinalyze (${S.flowChart && S.flowChart.perps ? S.flowChart.perps.length + ' perp + ' + S.flowChart.spots.length + ' spot markets' : 'loading'}) · CVD starts at 0 on the first visible candle · keys 1–8 timeframe, F full screen, / search`;
+}
+
+async function loadChart(g) {
+  const tf = cfg.tf;
+  clearTimers(S.chartTimers);
+  if (S.ws) { S.ws.close(); S.ws = null; }
+  $('#chart').innerHTML = '<div class="loading">Loading chart…</div>';
+  try {
+    S.chartBars = S.tradfi ? await API.yahooBars(S.ticker, tf) : await API.klines(S.sym, tf, 1000);
+    S.priceErr = null;
+  } catch (e) {
+    if (g !== S.gen) return;
+    S.priceErr = S.tradfi ? 'Yahoo Finance: ' + e.message : `Binance price feed not reachable (${e.message}). Binance blocks some countries / networks.`;
+    $('#chart').innerHTML = `<div class="loading">${esc(S.priceErr)}</div>`;
+    return;
+  }
+  if (g !== S.gen || tf !== cfg.tf) return;
+  S.lastTick = Date.now() / 1000;
+  S.flowChart = tf === cfg.ltf && S.flow ? S.flow : null;
+  buildChartNow();
+  if (S.tradfi) {
+    every(async () => {
+      try {
+        const b = await API.yahooBars(S.ticker, tf);
+        if (g !== S.gen || tf !== cfg.tf) return;
+        b.slice(-3).forEach(x => applyBar(x, tf));
+        S.lastTick = Date.now() / 1000;
+      } catch (e) { /* keep last */ }
+    }, 30000, S.chartTimers);
+  } else {
+    S.wsState = 'connecting';
+    S.ws = API.liveKlines(S.sym, tf, bar => { if (g === S.gen && tf === cfg.tf) applyBar(bar, tf); }, s => { S.wsState = s; updateStatus(); });
+    if (tf !== cfg.ltf) loadChartFlow(g);          // same timeframe: the entry-timeframe data fills the panes
+    if (cfg.panes.includes('cbp')) loadCbp(g);
+    every(() => { if (tf !== cfg.ltf) loadChartFlow(g); if (cfg.panes.includes('cbp')) loadCbp(g); }, 60000, S.chartTimers);
+  }
+}
+
+function applyBar(bar, tf) {
+  const B = S.chartBars, last = B[B.length - 1];
+  if (last && bar.t < last.t) return;
+  if (last && bar.t === last.t) B[B.length - 1] = bar; else B.push(bar);
+  S.lastTick = Date.now() / 1000;
+  if (S.chart) S.chart.update(bar);
+  const px = $('#heroPx'); if (px) px.textContent = UI.fp(bar.c, S.prec);
+  document.title = `${S.asset} ${UI.fp(bar.c, S.prec)} · LOF`;
+  // keep the analysis candles current when the chart and entry timeframe match
+  if (tf === cfg.ltf && S.bars.ltf && S.bars.ltf.length) {
+    const L = S.bars.ltf, l = L[L.length - 1];
+    if (bar.t === l.t) L[L.length - 1] = bar; else if (bar.t > l.t) { L.push(bar); L.shift(); }
+    if (bar.closed || Date.now() - (S.lastRun || 0) > 15000) runAnalysis();
+  }
+}
+
+async function loadChartFlow(g) {
+  const tf = cfg.tf;
+  try {
+    const P = cfg.panes, parts = [];
+    if (P.includes('oi')) parts.push('oi');
+    if (P.includes('perp') || P.includes('cvd2')) parts.push('perp');
+    if (P.includes('spot') || P.includes('cvd2')) parts.push('spot');
+    if (!parts.length && !P.includes('liq')) { S.flowChart = null; return; }
+    const f = await API.czFlow(S.sym, tf, { liq: P.includes('liq'), parts });
+    if (g !== S.gen || tf !== cfg.tf) return;
+    S.flowChart = f;
+  } catch (e) {
+    if (g !== S.gen) return;
+    S.flowChart = { error: e.message };
+  }
+  fillPanes();
+}
+
+async function loadCbp(g) {
+  const tf = cfg.tf;
+  const G = { '5m': [300], '15m': [900], '30m': [900, 1800], '1h': [3600], '2h': [3600, 7200], '4h': [3600, 14400], '12h': [21600, 43200], '1D': [86400] }[tf];
+  try {
+    const [cb, bn] = await Promise.all([API.coinbaseCandles(S.base.replace(/^1000+/, '') + '-USD', G[0]), API.spotKlines(S.base.replace(/^1000+/, '') + 'USDT', tf, 300)]);
+    if (g !== S.gen || tf !== cfg.tf) return;
+    const cbr = G[1] ? API.resample(cb, G[1]) : cb;
+    const bnMap = new Map(bn.map(b => [b.t, b.c]));
+    S.cbp = cbr.filter(b => bnMap.has(b.t)).map(b => ({ time: b.t, value: (b.c / bnMap.get(b.t) - 1) * 100 }));
+    S.cbOk = true;
+  } catch (e) {
+    S.cbp = []; S.cbOk = false;
+  }
+  fillPanes();
+}
+
+// ── analysis ────────────────────────────────────────────────
+function runAnalysis() {
+  if (!S.bars.ltf || !S.bars.daily) return;
+  S.lastRun = Date.now();
+  let r;
+  try {
+    const flow = S.tradfi ? null : (S.flow && !S.flow.error ? S.flow : null);
+    r = analyze({ ltf: S.bars.ltf, daily: S.bars.daily, h4: S.bars.h4, m30: S.bars.m30, flow, snap: flow && flow.snap,
+      tradfi: S.tradfi, params: Object.assign({}, cfg.params, { manual: S.manual }) });
+  } catch (e) { toast('Analysis error: ' + esc(e.message)); return; }
+  S.r = r;
+  if (S.tradfi) S.perf = perfFromDaily(S.bars.daily, r.price);
+  renderPanels();
+  if (S.chart) S.chart.setOverlays(overlays(r));
+  // signals: record + alert (only when order flow is in, so the score is final)
+  if (r.decision !== 'WAIT' && (S.tradfi || (S.flow && !S.flow.error))) onReady(S.asset, S.sym, !S.tradfi, r, 'main');
+}
+
+function renderPanels() {
+  const s = st(), r = S.r;
+  UI.renderHero(s, r);
+  UI.renderOverview(s, r, S.ov);
+  UI.renderPlan(s, r, setLtf, saveJournal);
+  UI.renderChecklist(s, r, v => { S.manual = v; runAnalysis(); });
+  UI.renderBias(s, r);
+  UI.renderLevels(s, r);
+  UI.renderFlow(s, r, S.tradfi ? null : S.flow);
+  UI.renderMarkets(s, S.tradfi ? null : S.flow, S.cbOk);
+  if (r) document.title = `${S.asset} ${UI.fp(r.price, S.prec)} · LOF`;
+}
+
+async function loadAnalysisBars(g, which = 'all') {
+  const ltf = cfg.ltf;
+  try {
+    if (S.tradfi) {
+      const t = S.ticker;
+      const jobs = [API.yahooBars(t, ltf)];
+      if (which === 'all') jobs.push(API.yahooRaw(t, '30m', '1mo').then(x => x.bars), API.yahooBars(t, '4h'), API.yahooRaw(t, '1d', '1y').then(x => x.bars));
+      const [l, m30, h4, d] = await Promise.all(jobs);
+      if (g !== S.gen || ltf !== cfg.ltf) return;
+      S.bars.ltf = l;
+      if (which === 'all') Object.assign(S.bars, { m30, h4, daily: d });
+    } else {
+      const jobs = [API.klines(S.sym, ltf, 400)];
+      if (which === 'all') jobs.push(API.klines(S.sym, '1D', 200), API.klines(S.sym, '4h', 200), API.klines(S.sym, '30m', 720));
+      const [l, d, h4, m30] = await Promise.all(jobs);
+      if (g !== S.gen || ltf !== cfg.ltf) return;
+      S.bars.ltf = l;
+      if (which === 'all') Object.assign(S.bars, { daily: d, h4, m30 });
+    }
+    runAnalysis();
+  } catch (e) {
+    if (g === S.gen) { S.priceErr = e.message; updateStatus(); }
+  }
+}
+
+async function loadFlow(g) {
+  const ltf = cfg.ltf;
+  try {
+    const f = await API.czFlow(S.sym, ltf, { snap: true, liq: true });
+    if (g !== S.gen || ltf !== cfg.ltf) return;
+    S.flow = f;
+  } catch (e) {
+    if (g !== S.gen) return;
+    S.flow = { error: e.message };
+  }
+  if (cfg.tf === cfg.ltf) { S.flowChart = S.flow; fillPanes(); }
+  runAnalysis();
+  updateStatus();
+}
+
+async function loadOverview(g) {
+  if (S.tradfi) return;
+  const sym = S.base.replace(/^(1000000|100000|10000|1000|1M)(?=[A-Z])/, '').toLowerCase();
+  try {
+    let id = (cfg.cgId[S.asset] || '').trim();
+    if (!id) {
+      const s = await API.cg('search', { query: sym });
+      const hits = (s.coins || []).filter(c => (c.symbol || '').toLowerCase() === sym).sort((a, b) => (a.market_cap_rank || 1e9) - (b.market_cap_rank || 1e9));
+      if (!hits.length) throw new Error('not found');
+      id = hits[0].id;
+    }
+    const j = await API.cg('coins/' + id, { localization: 'false', tickers: 'false', community_data: 'false', developer_data: 'false' });
+    if (g !== S.gen) return;
+    const md = j.market_data || {}, usd = k => (md[k] || {}).usd;
+    const price = usd('current_price');
+    let fdv = usd('fully_diluted_valuation');
+    if (price && md.max_supply) fdv = price * md.max_supply; else if (price && md.total_supply) fdv = price * md.total_supply;
+    S.ov = { id, name: j.name, rank: j.market_cap_rank, inflationary: !md.max_supply, mcap: usd('market_cap'), fdv, volume: usd('total_volume'),
+      ath: usd('ath'), ath_chg: usd('ath_change_percentage'), chg_7d: md.price_change_percentage_7d, chg_30d: md.price_change_percentage_30d,
+      max: md.max_supply, categories: (j.categories || []).filter(Boolean).slice(0, 3) };
+    S.title = `${j.name} (${S.asset})`;
+    S.sub = [S.ov.rank ? `Rank #${S.ov.rank}` : '', `CoinGecko: ${esc(id)}`, S.ov.categories.map(esc).join(', ')].filter(Boolean).join(' · ') + '<br>' + S.baseSub;
+  } catch (e) {
+    if (g !== S.gen) return;
+    S.ov = null;
+  }
+  renderPanels();
+}
+
+// ── load an asset ───────────────────────────────────────────
+async function loadAsset(key) {
+  if (!API.TRADFI[key] && !S.byBase[key]) { toast(`${esc(key)} isn't available on Binance futures.`); key = 'BTC'; }
+  const g = ++S.gen;
+  clearTimers(S.timers); clearTimers(S.chartTimers);
+  if (S.ws) { S.ws.close(); S.ws = null; }
+  Object.assign(S, { asset: key, tradfi: !!API.TRADFI[key], bars: {}, chartBars: [], flow: null, flowChart: null, cbp: null, cbOk: null,
+    r: null, ov: undefined, chg24: NaN, perf: null, manual: false, priceErr: null, lastTick: 0, wsState: 'connecting' });
+  cfg.asset = key; saveCfg();
+  if (S.tradfi) {
+    const d = API.TRADFI[key];
+    Object.assign(S, { ticker: d.t, sym: d.t, base: key, title: d.name, sub: `Chart: Yahoo Finance · ${esc(d.t)} · price data only (no order flow)`, prec: ['US2Y', 'US10Y', 'US30Y'].includes(key) ? 3 : key === 'ETHBTC' ? 5 : 2 });
+  } else {
+    const m = S.byBase[key];
+    Object.assign(S, { sym: m.sym, base: m.base, prec: m.prec, title: key, sub: `Chart: Binance · ${esc(m.sym)} · ${m.quote} perpetual · live` });
+    S.baseSub = S.sub;
+  }
+  renderQuick(); renderPanels(); updateStatus();
+  history.replaceState(null, '', '#' + encodeURIComponent(key));
+
+  loadChart(g);
+  loadAnalysisBars(g, 'all');
+  if (!S.tradfi) {
+    loadFlow(g);
+    loadOverview(g);
+    const tick = async () => { try { const t = await API.ticker24(S.sym); if (g === S.gen) { S.chg24 = +t.priceChangePercent; UI.renderHero(st(), S.r); } } catch (e) { /* ignore */ } };
+    tick();
+    every(tick, 60000);
+    every(() => loadFlow(g), 60000);
+    every(() => { if (cfg.tf !== cfg.ltf) loadAnalysisBars(g, 'ltf'); }, 30000);
+  } else {
+    every(() => loadAnalysisBars(g, 'ltf'), 30000);
+  }
+  every(() => loadAnalysisBars(g, 'all'), 10 * 60000);
+}
+
+// ── controls ────────────────────────────────────────────────
+function setTf(tf) {
+  if (!TFS.includes(tf) || tf === cfg.tf) return;
+  cfg.tf = tf; saveCfg(); renderBar();
+  S.cbp = null;
+  loadChart(S.gen);
+}
+function setLtf(ltf) {
+  if (ltf === cfg.ltf) return;
+  cfg.ltf = ltf; saveCfg();
+  S.flow = null; S.r = null; renderPanels();
+  const g = S.gen;
+  loadAnalysisBars(g, 'ltf');
+  if (!S.tradfi) loadFlow(g);
+  if (cfg.tf !== ltf && !S.tradfi) loadChartFlow(g);
+}
+
+function renderBar() {
+  $('#tfs').innerHTML = TFS.map((t, i) => `<button data-tf="${t}" class="${t === cfg.tf ? 'on' : ''}" title="Key ${i + 1}">${t}</button>`).join('');
+  $('#tfs').querySelectorAll('[data-tf]').forEach(b => b.onclick = () => setTf(b.dataset.tf));
+  $('#sizes').innerHTML = Object.keys(SIZES).map(s => `<button data-s="${s}" class="${s === cfg.size ? 'on' : ''}">${s}</button>`).join('');
+  $('#sizes').querySelectorAll('[data-s]').forEach(b => b.onclick = () => {
+    cfg.size = b.dataset.s; saveCfg(); renderBar();
+    $('#chart').style.height = chartHeight(chartPanes().length) + 'px';
+  });
+  const opt = (list, sel, attr) => list.map(([k, n]) => `<span class="opt ${sel.includes(k) ? 'on' : ''}" data-${attr}="${esc(k)}">${esc(n)}</span>`).join('');
+  $('#mPanes .pop').innerHTML = `<h4>Panes under the chart</h4><div class="opts">${opt(PANES, cfg.panes, 'p')}</div>
+    <div class="muted" style="margin-top:8px;font-size:11.5px">OI, CVD and liquidations: Coinalyze. Volume: Binance. Coinbase premium: Coinbase vs Binance spot.</div>`;
+  $('#mLayers .pop').innerHTML = `<h4>Lines</h4><div class="opts">${opt(LINE_LAYERS.map(x => [x, x]), cfg.lines, 'l')}</div>
+    <h4>Zones &amp; profiles</h4><div class="opts">${opt(ZONE_LAYERS.map(x => [x, x]), cfg.zones, 'z')}</div>
+    <h4>Impulse sensitivity</h4><div class="seg">${Object.keys(IMPULSE).map(k => `<button data-i="${k}" class="${k === cfg.impulse ? 'on' : ''}">${k}</button>`).join('')}</div>`;
+  const toggle = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : arr.concat([v]);
+  document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
+    cfg.panes = toggle(cfg.panes, b.dataset.p); saveCfg(); renderBar();
+    if (b.dataset.p === 'cbp' && cfg.panes.includes('cbp') && !S.tradfi) loadCbp(S.gen);
+    if (cfg.panes.includes(b.dataset.p) && b.dataset.p !== 'cbp' && b.dataset.p !== 'vol' && !S.tradfi && cfg.tf !== cfg.ltf) loadChartFlow(S.gen);
+    buildChartNow();
+  });
+  document.querySelectorAll('[data-l]').forEach(b => b.onclick = () => { cfg.lines = toggle(cfg.lines, b.dataset.l); saveCfg(); renderBar(); buildChartNow(); });
+  document.querySelectorAll('[data-z]').forEach(b => b.onclick = () => { cfg.zones = toggle(cfg.zones, b.dataset.z); saveCfg(); renderBar(); buildChartNow(); });
+  document.querySelectorAll('[data-i]').forEach(b => b.onclick = () => { cfg.impulse = b.dataset.i; saveCfg(); renderBar(); buildChartNow(); });
+}
+['#mPanes', '#mLayers'].forEach(id => {
+  $(id + ' > .btn').onclick = e => { e.stopPropagation(); const open = $(id).classList.contains('open'); document.querySelectorAll('.menu').forEach(m => m.classList.remove('open')); if (!open) $(id).classList.add('open'); };
+  $(id + ' .pop').onclick = e => e.stopPropagation();
+});
+document.addEventListener('click', () => document.querySelectorAll('.menu').forEach(m => m.classList.remove('open')));
+
+// tabs
+$('#tabs').querySelectorAll('[data-tab]').forEach(b => b.onclick = () => {
+  $('#tabs').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  ['screener', 'pulse', 'history', 'markets'].forEach(t => { $('#tab-' + t).hidden = t !== b.dataset.tab; });
+  if (b.dataset.tab === 'history') X.renderHistory(X.loadHist(), loadAsset);
+});
+
+// ── journal ─────────────────────────────────────────────────
+async function saveJournal() {
+  const r = S.r; if (!r) return;
+  const t = { coin: S.asset, side: r.lead_long ? 'LONG' : 'SHORT', setup: r.setup, entry: +UI.fp(r.price, S.prec).replace(/,/g, ''),
+    sl: +UI.fp(r.sl, S.prec).replace(/,/g, ''), tp1: +UI.fp(r.tp1, S.prec).replace(/,/g, ''), tp2: isNum(r.tp2) ? +UI.fp(r.tp2, S.prec).replace(/,/g, '') : null,
+    rr: isNum(r.rr) ? +r.rr.toFixed(2) : null, score: r.score, tf: cfg.ltf, notes: `${r.regime[0]} · ${r.loc.zone} · session ${r.session}` };
+  try { const j = await API.saveJournal(t); toast(`Saved to Notion. ${j.url ? `<a href="${esc(j.url)}" target="_blank">Open</a>` : ''}`); }
+  catch (e) { toast(/not set up/i.test(e.message) ? 'Notion isn\'t set up yet. Add NOTION_TOKEN and NOTION_DB_ID in Vercel (see README).' : 'Journal error: ' + esc(e.message), 6000); }
+}
+
+// ── screener + alerts + history ─────────────────────────────
+function onReady(key, sym, isCrypto, r, source) {
+  X.recordSignal(key, sym, isCrypto, r, cfg.ltf, source);
+  const k = key + ':' + r.decision;
+  if (S.alerted[k] && r.now - S.alerted[k] < 7200) return;      // one alert per market + side every 2 hours
+  S.alerted[k] = r.now;
+  try { localStorage.setItem('lof_alerted', JSON.stringify(S.alerted)); } catch (e) { /* ignore */ }
+  X.fireAlert(cfg, S.server && S.server.telegram, key, r, cfg.ltf);
+}
+
+let scanning = false;
+async function runScan() {
+  if (scanning || !S.symbols.length) return;
+  scanning = true;
+  const keys = cfg.watch.filter(k => API.TRADFI[k] || S.byBase[k]);
+  let prem = {};
+  try { prem = await API.premiumAll(); } catch (e) { /* ignore */ }
+  const out = [];
+  const status = () => `Watchlist scan · ${out.length}/${keys.length} · entry TF ${cfg.ltf}${S.scanAt ? ' · last full scan ' + new Date(S.scanAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''} · <a href="#" id="editWatch">edit watchlist</a>`;
+  const q = keys.slice();
+  async function worker() {
+    while (q.length) {
+      const k = q.shift();
+      try {
+        const crypto = isCryptoKey(k);
+        const x = await X.scanAsset(k, crypto, crypto ? S.byBase[k].sym : API.TRADFI[k].t, cfg.ltf, cfg.params, prem);
+        out.push(x);
+        if (x.r.decision !== 'WAIT' && k !== S.asset) onReady(k, x.sym, crypto, x.r, 'screener');
+      } catch (e) { /* skip this one */ }
+      S.scan = out.slice();
+      X.renderScreener(S.scan, S.asset, loadAsset, status());
+      bindEditWatch();
+    }
+  }
+  await Promise.all([worker(), worker(), worker()]);
+  S.scanAt = Date.now() / 1000;
+  S.scan = out;
+  X.renderScreener(S.scan, S.asset, loadAsset, status());
+  bindEditWatch();
+  renderQuick();
+  scanning = false;
+}
+function bindEditWatch() { const a = $('#editWatch'); if (a) a.onclick = e => { e.preventDefault(); openSettings(); }; }
+
+// ── settings drawer ─────────────────────────────────────────
+function openSettings() {
+  const d = $('#drawer'), p = cfg.params, sv = S.server || {};
+  const allKeys = allAssets().map(a => a.key);
+  d.innerHTML = `<h2>Settings <button class="icon-btn" id="dClose">✕</button></h2>
+    <h4>Watchlist (screener + top bar)</h4>
+    <div class="opts" id="wList">${cfg.watch.map(k => `<span class="opt on" data-w="${esc(k)}">${esc(k)} ✕</span>`).join('')}</div>
+    <div class="field"><input type="text" id="wAdd" list="wAll" placeholder="Add, e.g. SOL" style="width:100%"><datalist id="wAll">${allKeys.slice(0, 800).map(k => `<option value="${esc(k)}">`).join('')}</datalist><button class="btn" id="wBtn">Add</button></div>
+    <h4>Strategy</h4>
+    <div class="field"><span>Swing strength (MSS pivots)</span><input type="number" id="sPiv" min="1" max="10" value="${p.piv}"></div>
+    <div class="field"><span>Sweep / MSS valid for (bars)</span><input type="number" id="sValid" min="5" max="60" value="${p.valid}"></div>
+    <div class="field"><span>Minimum R:R</span><input type="number" id="sRR" min="0.5" max="10" step="0.1" value="${p.minRR}"></div>
+    <div class="field"><span>Minimum score (of 9)</span><input type="number" id="sScore" min="1" max="9" value="${p.minScore}"></div>
+    <h4>Alerts (when a market turns LONG / SHORT READY)</h4>
+    <div class="field"><span>Browser notification</span><input type="checkbox" id="aBrowser" ${cfg.alerts.browser ? 'checked' : ''}></div>
+    <div class="field"><span>Telegram ${sv.telegram ? '' : '<span class="muted">(not set up, see README)</span>'}</span><input type="checkbox" id="aTg" ${cfg.alerts.telegram ? 'checked' : ''} ${sv.telegram ? '' : 'disabled'}></div>
+    <div class="field"><button class="btn" id="aTest" ${sv.telegram ? '' : 'disabled'}>Send test message</button></div>
+    <div class="muted" style="font-size:11.5px">Alerts run while the dashboard is open (phone or PC). The screener checks your watchlist every 3 minutes.</div>
+    ${S.tradfi ? '' : `<h4>Coin info</h4><div class="field"><span>CoinGecko ID for ${esc(S.asset)}</span><input type="text" id="cgId" placeholder="auto" value="${esc(cfg.cgId[S.asset] || '')}"></div>`}
+    <h4>Setup</h4>
+    <div class="muted" style="line-height:1.7">Coinalyze: ${sv.coinalyze ? '<span class="up">connected</span>' : '<span class="dn">missing key</span>'} · Telegram: ${sv.telegram ? '<span class="up">set up</span>' : 'not set up'} · Notion journal: ${sv.notion ? '<span class="up">set up</span>' : 'not set up'}</div>
+    <div class="field"><button class="btn" id="rLayout">Reset chart layout</button><a class="btn" href="/login.html" id="logout">Sign out</a></div>`;
+  d.classList.add('open');
+  $('#dClose').onclick = () => d.classList.remove('open');
+  const num = (id, key, lo, hi) => $(id).onchange = e => { const v = Math.min(hi, Math.max(lo, +e.target.value)); if (isNum(v)) { cfg.params[key] = v; saveCfg(); runAnalysis(); } };
+  num('#sPiv', 'piv', 1, 10); num('#sValid', 'valid', 5, 60); num('#sRR', 'minRR', 0.5, 10); num('#sScore', 'minScore', 1, 9);
+  $('#wList').querySelectorAll('[data-w]').forEach(o => o.onclick = () => { cfg.watch = cfg.watch.filter(k => k !== o.dataset.w); saveCfg(); renderQuick(); openSettings(); });
+  const add = () => {
+    const v = $('#wAdd').value.trim().toUpperCase();
+    if (!v) return;
+    if (!API.TRADFI[v] && !S.byBase[v]) { toast(`${esc(v)} not found on Binance futures.`); return; }
+    if (!cfg.watch.includes(v)) cfg.watch.push(v);
+    saveCfg(); renderQuick(); openSettings(); runScan();
+  };
+  $('#wBtn').onclick = add; $('#wAdd').onkeydown = e => { if (e.key === 'Enter') add(); };
+  $('#aBrowser').onchange = async e => {
+    if (e.target.checked && 'Notification' in window && Notification.permission !== 'granted') {
+      const p2 = await Notification.requestPermission();
+      if (p2 !== 'granted') { e.target.checked = false; toast('Notifications are blocked in your browser settings.'); }
+    }
+    cfg.alerts.browser = e.target.checked; saveCfg();
+  };
+  $('#aTg').onchange = e => { cfg.alerts.telegram = e.target.checked; saveCfg(); };
+  $('#aTest').onclick = async () => { try { await API.sendTelegram('✅ LOF Dashboard test message'); toast('Test message sent.'); } catch (e) { toast('Telegram error: ' + esc(e.message)); } };
+  const cgI = $('#cgId'); if (cgI) cgI.onchange = e => { cfg.cgId[S.asset] = e.target.value.trim(); saveCfg(); S.ov = undefined; loadOverview(S.gen); };
+  $('#rLayout').onclick = () => { Object.assign(cfg, { lines: DEFAULTS.lines, zones: DEFAULTS.zones, panes: DEFAULTS.panes, size: 'M', impulse: 'Normal' }); saveCfg(); renderBar(); buildChartNow(); };
+  $('#logout').onclick = () => { document.cookie = 'lof_auth=; Max-Age=0; path=/'; };
+}
+$('#btnSettings').onclick = openSettings;
+
+// ── start ───────────────────────────────────────────────────
+async function start() {
+  renderBar();
+  X.updateClock(); X.loadNews();
+  setInterval(() => { X.updateClock(); X.updateNews(); }, 20000);
+  setInterval(X.loadNews, 30 * 60000);
+  setInterval(updateStatus, 2000);
+  API.serverConfig().then(c => { S.server = c; updateStatus(); }).catch(() => { S.server = null; });
+  try {
+    S.symbols = await API.binanceSymbols();
+    S.symbols.forEach(s => { if (!S.byBase[s.base]) S.byBase[s.base] = s; });
+  } catch (e) {
+    S.priceErr = 'Binance futures is not reachable from this network: ' + e.message;
+    toast(esc(S.priceErr), 10000);
+  }
+  const fromHash = decodeURIComponent(location.hash.slice(1) || '');
+  loadAsset(fromHash && (API.TRADFI[fromHash] || S.byBase[fromHash]) ? fromHash : (API.TRADFI[cfg.asset] || S.byBase[cfg.asset] ? cfg.asset : (S.symbols.length ? 'BTC' : 'GOLD')));
+  X.renderScreener([], S.asset, loadAsset, 'Scanning watchlist…');
+  setTimeout(runScan, 2500);
+  setInterval(() => { if (document.visibilityState === 'visible' || cfg.alerts.browser || cfg.alerts.telegram) runScan(); }, 180000);
+  X.renderPulse(null, loadAsset);
+  const pulse = () => X.loadPulse().then(p => X.renderPulse(p, loadAsset)).catch(() => {});
+  setTimeout(pulse, 1500); setInterval(pulse, 300000);
+  const evalH = async () => { const h = await X.evaluateHistory(); if (!$('#tab-history').hidden) X.renderHistory(h, loadAsset); };
+  setTimeout(evalH, 8000); setInterval(evalH, 300000);
+  window.addEventListener('hashchange', () => { const k = decodeURIComponent(location.hash.slice(1)); if (k && k !== S.asset && (API.TRADFI[k] || S.byBase[k])) loadAsset(k); });
+}
+start();

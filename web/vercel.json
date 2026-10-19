@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/cz.js": { "maxDuration": 60 },
+    "api/proxy.js": { "maxDuration": 30 }
+  },
+  "headers": [
+    { "source": "/js/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] },
+    { "source": "/css/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }] }
+  ]
+}
