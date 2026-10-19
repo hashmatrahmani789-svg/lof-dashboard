@@ -209,6 +209,31 @@ export async function loadPulse() {
   return { macro: macro.filter(Boolean), crypto, hist, fgc, fgs: fgsOut };
 }
 
+// Compact macro strip at the top of the page (always visible).
+export function renderStrip(p, onOpen) {
+  const el = $('#strip');
+  if (!p) { el.innerHTML = '<div class="s"><div class="l">Market pulse</div><div class="v muted">loading…</div></div>'; return; }
+  const ch = (v, sfx) => isNum(v) ? `<span class="c ${tone(v)}">${v > 0 ? '+' : ''}${v.toFixed(2)}${sfx}</span>` : '';
+  const item = (label, value, chg, spark, key, up) => `<div class="s ${key ? 'click' : ''}" ${key ? `data-open="${key}" title="Open chart"` : ''}>
+    <div class="l">${label}</div><div class="v">${value}${chg || ''}</div>${sparkSvg(spark, up)}</div>`;
+  const out = p.macro.map(m => item(m.label, m.kind === 'yield' ? m.value.toFixed(3) + '%' : m.kind === 'ratio' ? m.value.toFixed(5) : m.value.toFixed(2),
+    ch(m.chg, m.kind === 'yield' ? 'bp' : '%'), m.spark, m.key));
+  if (p.crypto) {
+    const H = k => p.hist[k] || {};
+    out.push(item('BTC.D', p.crypto.btc_d != null ? p.crypto.btc_d.toFixed(2) + '%' : '—', ch(H('btc_d').chg, ''), H('btc_d').spark));
+    out.push(item('ETH.D', p.crypto.eth_d != null ? p.crypto.eth_d.toFixed(2) + '%' : '—', ch(H('eth_d').chg, ''), H('eth_d').spark));
+    const us = H('usdt_d').spark;
+    out.push(item('USDT.D', p.crypto.usdt_d != null ? p.crypto.usdt_d.toFixed(2) + '%' : '—', ch(H('usdt_d').chg, ''), us, null, us && us.length > 1 ? us[us.length - 1] <= us[0] : null));
+    out.push(item('TOTAL', fusd(p.crypto.total), ch(p.crypto.chg, '%'), H('total').spark));
+    out.push(item('TOTAL2', fusd(p.crypto.total2), ch(H('total2').chg, '%'), H('total2').spark));
+    out.push(item('TOTAL3', fusd(p.crypto.total3), ch(H('total3').chg, '%'), H('total3').spark));
+  }
+  if (p.fgc) out.push(item('Crypto F&G', `${p.fgc.value} <span style="font-size:10.5px">${esc(p.fgc.label)}</span>`, '', p.fgc.spark));
+  if (p.fgs) out.push(item('Stock F&G', `${p.fgs.value} <span style="font-size:10.5px">${esc(p.fgs.label)}</span>`, '', p.fgs.spark));
+  el.innerHTML = out.join('') || '<div class="s"><div class="l">Market pulse</div><div class="v muted">unavailable</div></div>';
+  el.querySelectorAll('[data-open]').forEach(t => t.onclick = () => onOpen(t.dataset.open));
+}
+
 export function renderPulse(p, onOpen) {
   const el = $('#tab-pulse');
   if (!p) { el.innerHTML = '<div class="empty">Loading Market Pulse…</div>'; return; }
@@ -263,11 +288,24 @@ export function updateClock() {
   }
 }
 
-let newsCache = null;
+let newsCache = null, chartNews = [];
+const SHORT = [[/FOMC|Federal Funds|Fed Chair|Powell/i, 'FOMC'], [/Core CPI/i, 'Core CPI'], [/CPI/i, 'CPI'], [/Core PPI/i, 'Core PPI'], [/PPI/i, 'PPI'],
+  [/Non-Farm|NFP/i, 'NFP'], [/Unemployment Rate/i, 'Unemployment'], [/Core PCE/i, 'Core PCE'], [/PCE/i, 'PCE'], [/GDP/i, 'GDP'],
+  [/Retail Sales/i, 'Retail Sales'], [/ISM/i, 'ISM'], [/JOLTS/i, 'JOLTS'], [/Jobless Claims/i, 'Jobless Claims'], [/ADP/i, 'ADP']];
+const shortName = t => { const m = SHORT.find(([re]) => re.test(t)); return m ? m[1] : t.split(' ').slice(0, 2).join(' '); };
+export const newsForChart = () => chartNews;
 export async function loadNews() {
-  try { newsCache = (await API.calendar()).filter(e => e.impact === 'High' && e.country === 'USD').map(e => ({ title: e.title, t: Date.parse(e.date) / 1000, forecast: e.forecast, previous: e.previous })); }
-  catch (e) { newsCache = null; }
+  try {
+    const all = (await API.calendar()).filter(e => e.country === 'USD' && (e.impact === 'High' || e.impact === 'Medium'))
+      .map(e => ({ title: e.title, short: shortName(e.title), impact: e.impact, t: Date.parse(e.date) / 1000, forecast: e.forecast, previous: e.previous }));
+    newsCache = all.filter(e => e.impact === 'High');
+    // one marker per time slot; high impact first
+    const byT = new Map();
+    all.sort((a, b) => (a.impact === 'High' ? 0 : 1) - (b.impact === 'High' ? 0 : 1)).forEach(e => { if (!byT.has(e.t)) byT.set(e.t, e); else if (byT.get(e.t).short !== e.short && e.impact === 'High') byT.get(e.t).short += ' · ' + e.short; });
+    chartNews = [...byT.values()].filter(e => e.impact === 'High' || /PPI|CPI|PCE|GDP|ISM|Retail|JOLTS|Claims|ADP/.test(e.short)).sort((a, b) => a.t - b.t);
+  } catch (e) { newsCache = null; chartNews = []; }
   updateNews();
+  if (typeof window.__onNews === 'function') window.__onNews();
 }
 export function updateNews() {
   const el = $('#news');

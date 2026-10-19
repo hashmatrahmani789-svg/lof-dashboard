@@ -137,6 +137,30 @@ export function asiaRange(m30, now) {
   return { start, end, hi: Math.max(...w.map(b => b.h)), lo: Math.min(...w.map(b => b.l)), live: now < end };
 }
 
+// Where each level starts (UTC seconds), so lines can be drawn from their origin to the right.
+export function levelTimes(daily, m30, now) {
+  const today = dayStart(now), weekStart = today - weekday(today) * DAY, pwStart = weekStart - 7 * DAY;
+  const out = {};
+  const ext = (bars, key, hiKey) => {
+    if (!bars.length) return;
+    let bh = bars[0], bl = bars[0];
+    bars.forEach(b => { if (b.h > bh.h) bh = b; if (b.l < bl.l) bl = b; });
+    out[hiKey] = bh.t; out[key] = bl.t;
+  };
+  const md = (m30 || []).filter(b => dayStart(b.t) < today);
+  let pday = today - DAY;
+  if (md.length && !md.some(b => dayStart(b.t) === pday)) pday = dayStart(md[md.length - 1].t);
+  const dayBars = (m30 || []).filter(b => dayStart(b.t) === pday);
+  const weekBars = (m30 || []).filter(b => dayStart(b.t) >= pwStart && dayStart(b.t) < weekStart);
+  if (dayBars.length) ext(dayBars, 'pdl', 'pdh');
+  else if (daily && daily.length) { const d = daily.filter(b => dayStart(b.t) < today).pop(); if (d) { out.pdh = d.t; out.pdl = d.t; } }
+  if (weekBars.length) ext(weekBars, 'pwl', 'pwh');
+  else out.pwh = out.pwl = pwStart;
+  ['pd_poc', 'pd_vah', 'pd_val'].forEach(k => { out[k] = dayBars.length ? dayBars[0].t : pday; });
+  ['pw_poc', 'pw_vah', 'pw_val'].forEach(k => { out[k] = weekBars.length ? weekBars[0].t : pwStart; });
+  return out;
+}
+
 export function computeLevels(daily, m30, now) {
   const today = dayStart(now), weekStart = today - weekday(today) * DAY, pwStart = weekStart - 7 * DAY;
   let prevDay = today - DAY;
@@ -338,7 +362,7 @@ export function analyze(inp) {
     now, price, session, opens, asia: asiaRange(m30, now), profiles: sessionProfiles(m30, now),
     vs_ny_mid: !isNum(nyMid) ? 0 : price > nyMid ? 1 : -1,
     set_long: setL, set_short: setS, score_long: scoreL, score_short: scoreS, checks_long: checksL, checks_short: checksS,
-    d_bias: dB, h_bias: hB, d_ema: [dE1, dE2], h_ema: [hE1, hE2], levels: lv, loc, struct: s,
+    d_bias: dB, h_bias: hB, d_ema: [dE1, dE2], h_ema: [hE1, hE2], levels: lv, level_t: levelTimes(daily, m30, now), loc, struct: s,
     perp_cvd_4h: perp4, spot_cvd_4h: spot4, px_4h: px4, oi_now: oiNow, oi_1h: oi1, oi_4h: oi4, oi_24h: oi24,
     funding, pred_funding: predFunding, liq_long_24h: liqL, liq_short_24h: liqS,
     ls_ratio: snap && isNum(snap.ls) ? snap.ls : NaN,

@@ -46,6 +46,8 @@ export default async function handler(req, res) {
       }
       case 'fng':
         return send(res, 200, await cached('fng', 600e3, () => getJson('https://api.alternative.me/fng/?limit=30')), 600);
+      case 'fnghist':
+        return send(res, 200, await cached('fnghist', 3600e3, () => getJson('https://api.alternative.me/fng/?limit=0')), 3600);
       case 'cnn':
         return send(res, 200, await cached('cnn', 600e3, () => getJson('https://production.dataviz.cnn.io/index/fearandgreed/graphdata',
           { Referer: 'https://edition.cnn.com/' })), 600);

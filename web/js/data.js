@@ -80,31 +80,45 @@ export async function binanceOiHist(sym, period = '1h', limit = 30) {
   return j.map(x => ({ t: Math.floor(x.timestamp / 1000), v: +x.sumOpenInterestValue }));
 }
 
-// Live candles over a websocket. Reconnects automatically.
+// Live candles: Binance futures websocket (new /market address), with a REST fallback
+// that polls every 2 seconds whenever the websocket is silent.
 export function liveKlines(sym, tf, onBar, onStatus) {
-  let ws = null, closed = false, retry = 0, timer = null;
-  const url = `wss://fstream.binance.com/ws/${sym.toLowerCase()}@kline_${BN_TF[tf] || tf}`;
+  let ws = null, closed = false, retry = 0, timer = null, lastMsg = 0, polling = false;
+  const iv = BN_TF[tf] || tf;
+  const url = `wss://fstream.binance.com/market/ws/${sym.toLowerCase()}@kline_${iv}`;
+  const status = s => onStatus && onStatus(s);
   const open = () => {
     if (closed) return;
-    try { ws = new WebSocket(url); } catch (e) { onStatus && onStatus('error'); return schedule(); }
-    ws.onopen = () => { retry = 0; onStatus && onStatus('live'); };
+    try { ws = new WebSocket(url); } catch (e) { return schedule(); }
     ws.onmessage = ev => {
       try {
         const k = JSON.parse(ev.data).k; if (!k) return;
+        lastMsg = Date.now(); retry = 0; status('live');
         onBar({ t: Math.floor(k.t / 1000), o: +k.o, h: +k.h, l: +k.l, c: +k.c, v: +k.q, bv: +k.Q, closed: k.x });
       } catch (e) { /* ignore */ }
     };
-    ws.onclose = () => { if (!closed) { onStatus && onStatus('reconnecting'); schedule(); } };
+    ws.onclose = () => { if (!closed) schedule(); };
     ws.onerror = () => { try { ws.close(); } catch (e) { /* ignore */ } };
   };
   const schedule = () => { clearTimeout(timer); timer = setTimeout(open, Math.min(30000, 1000 * 2 ** retry++)); };
+  const poll = setInterval(async () => {
+    if (closed || Date.now() - lastMsg < 6000 || polling) return;
+    polling = true;
+    try {
+      const j = await getJSON(`${FAPI}/fapi/v1/klines?symbol=${sym}&interval=${iv}&limit=2`, {}, 5000);
+      if (closed) return;
+      j.map(toBar).forEach(b => onBar(b));
+      status('polling');
+    } catch (e) { status('reconnecting'); }
+    finally { polling = false; }
+  }, 2000);
   open();
-  return { close() { closed = true; clearTimeout(timer); try { ws && ws.close(); } catch (e) { /* ignore */ } } };
+  return { close() { closed = true; clearTimeout(timer); clearInterval(poll); try { ws && ws.close(); } catch (e) { /* ignore */ } } };
 }
 
 // ── Server endpoints ────────────────────────────────────────
-export async function czFlow(sym, tf, { snap = false, liq = false, bars = 400, parts = ['oi', 'perp', 'spot'] } = {}) {
-  return getJSON(`/api/cz?sym=${sym}&tf=${tf}&bars=${bars}&snap=${snap ? 1 : 0}&liq=${liq ? 1 : 0}&parts=${parts.join(',')}`, {}, 65000);
+export async function czFlow(sym, tf, { snap = false, liq = false, bars = 400, parts = ['oi', 'perp', 'spot'], n = 12 } = {}) {
+  return getJSON(`/api/cz?sym=${sym}&tf=${tf}&bars=${bars}&snap=${snap ? 1 : 0}&liq=${liq ? 1 : 0}&parts=${parts.join(',')}&n=${n}`, {}, 65000);
 }
 export async function serverConfig() { return getJSON('/api/config'); }
 export async function sendTelegram(text) {
@@ -145,5 +159,6 @@ export async function coinbaseCandles(product, gran) {
 // ── CoinGecko, Fear & Greed, calendar ──────────────────────
 export const cg = (path, params = {}) => getJSON(`/api/proxy?src=cg&path=${encodeURIComponent(path)}&` + new URLSearchParams(params));
 export const fngCrypto = () => getJSON('/api/proxy?src=fng');
+export const fngHistory = () => getJSON('/api/proxy?src=fnghist');
 export const fngStocks = () => getJSON('/api/proxy?src=cnn');
 export const calendar = () => getJSON('/api/proxy?src=ff');

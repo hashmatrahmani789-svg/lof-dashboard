@@ -1,5 +1,6 @@
 // TradingView-style chart (TradingView Lightweight Charts v5, Apache-2.0) with LOF layers and drawing tools.
 import { nyMinutes } from './engine.js';
+import { attachDrawing } from './drawing.js';
 
 const LC = window.LightweightCharts;
 const OFF = -new Date().getTimezoneOffset() * 60;      // show times in your local time zone
@@ -22,25 +23,21 @@ const TEMPLATE = `
     <button class="lc-btn" data-act="fs" title="Full screen (F)">⛶</button>
   </div>
   <div class="lc-hint"></div>
-  <div class="lc-tools">
-    <button data-tool="h" title="Horizontal line">─</button>
-    <button data-tool="trend" title="Trend line">╱</button>
-    <button data-tool="rect" title="Rectangle / zone (OB, FVG)">▭</button>
-    <button data-tool="fib" title="Fib retracement (OTE 0.62–0.79)">F</button>
-    <button data-tool="long" title="Long position" style="color:${UP}">▲</button>
-    <button data-tool="short" title="Short position" style="color:${DN}">▼</button>
-    <hr>
-    <button data-act="magnet" title="Magnet: snap to candle high / low / open / close">🧲</button>
-    <button data-act="undo" title="Undo (Ctrl+Z)">↶</button>
-    <button data-act="clear" title="Delete all drawings for this market">🗑</button>
-  </div>
+  <div class="lc-tools"></div>
   <div class="lc-c"></div>
 </div>`;
 
 // D: {coin, tf, prec, candles:[{time,open,high,low,close}], vol:[], layers:{}, impulseMult, panes:[{key, series:[{kind,name,color,data,cvd,scale}]}],
 //     opens:[{title,price,time,color}], plan:[{title,price,color}], levels:[{title,price,color}], asia, profiles}
+const THEMES = {
+  dark: { bg: '#0f131c', text: '#c3c6ce', grid: '#171c27', border: '#232838', sep: '#232838', sepHover: '#33394a', label: 'rgba(15,19,28,0.85)', box: 'rgba(149,152,161,0.10)', boxLine: 'rgba(149,152,161,0.6)', boxText: '#b2b5be' },
+  light: { bg: '#ffffff', text: '#2a2e39', grid: '#eef0f4', border: '#d6dae3', sep: '#d6dae3', sepHover: '#b8bfcc', label: 'rgba(255,255,255,0.9)', box: 'rgba(90,96,110,0.08)', boxLine: 'rgba(90,96,110,0.55)', boxText: '#4a5060' },
+};
+
 export function buildChart(host, D) {
+  const TH = THEMES[D.theme] || THEMES.dark;
   host.innerHTML = TEMPLATE;
+  let dead = false;                         // set when this chart is replaced, so late timers do nothing
   const q = s => host.querySelector(s);
   const wrap = q('.lc-wrap'), el = q('.lc-c'), legend = q('.lc-legend');
   const C = D.candles, L = D.layers || {};
@@ -50,14 +47,14 @@ export function buildChart(host, D) {
   const chart = LC.createChart(el, {
     autoSize: true,
     localization: { locale: 'en-US' },
-    layout: { background: { type: 'solid', color: '#0f131c' }, textColor: '#c3c6ce', fontSize: 12,
+    layout: { background: { type: 'solid', color: TH.bg }, textColor: TH.text, fontSize: 12,
       fontFamily: "Inter, 'Segoe UI', system-ui, sans-serif",
-      panes: { separatorColor: '#232838', separatorHoverColor: '#33394a', enableResize: true } },
-    grid: { vertLines: { color: '#171c27' }, horzLines: { color: '#171c27' } },
+      panes: { separatorColor: TH.sep, separatorHoverColor: TH.sepHover, enableResize: true } },
+    grid: { vertLines: { color: TH.grid }, horzLines: { color: TH.grid } },
     crosshair: { mode: LC.CrosshairMode.Normal },
-    rightPriceScale: { borderColor: '#232838', minimumWidth: 72 },
-    leftPriceScale: { borderColor: '#232838', visible: false },
-    timeScale: { borderColor: '#232838', timeVisible: true, secondsVisible: false, rightOffset: 8 },
+    rightPriceScale: { borderColor: TH.border, minimumWidth: 72 },
+    leftPriceScale: { borderColor: TH.border, visible: false },
+    timeScale: { borderColor: TH.border, timeVisible: true, secondsVisible: false, rightOffset: 8 },
   });
   const cs = chart.addSeries(LC.CandlestickSeries, {
     upColor: UP, downColor: DN, borderVisible: false, wickUpColor: UP, wickDownColor: DN,
@@ -80,7 +77,7 @@ export function buildChart(host, D) {
 
   // ── EMAs
   const emas = [];
-  [[12, 'ema12', '#26c6da'], [21, 'ema21', '#ffb74d'], [50, 'ema50', '#e0e0e0']].forEach(([n, key, color]) => {
+  [[12, 'ema12', '#26c6da'], [21, 'ema21', '#ffb74d'], [50, 'ema50', D.theme === 'light' ? '#5d6273' : '#e0e0e0']].forEach(([n, key, color]) => {
     if (!L[key] || !C.length) return;
     const k = 2 / (n + 1), vals = [];
     C.forEach((c, i) => vals.push(i === 0 ? c.close : c.close * k + vals[i - 1] * (1 - k)));
@@ -94,10 +91,9 @@ export function buildChart(host, D) {
   let lines = [];
   function drawLines() {
     lines.forEach(pl => cs.removePriceLine(pl)); lines = [];
-    (D.levels || []).forEach(l => lines.push(cs.createPriceLine({ price: l.price, color: l.color, lineWidth: 1,
-      lineStyle: LC.LineStyle.Dashed, axisLabelVisible: true, title: l.title })));
-    (D.plan || []).forEach(p => lines.push(cs.createPriceLine({ price: p.price, color: p.color, lineWidth: 2,
-      lineStyle: p.title === 'Entry' ? LC.LineStyle.Solid : LC.LineStyle.LargeDashed, axisLabelVisible: true, title: p.title })));
+    // axis labels only; the lines are drawn from where each level starts (see the layers below)
+    (D.levels || []).concat(D.plan || []).forEach(l => lines.push(cs.createPriceLine({ price: l.price, color: l.color,
+      lineVisible: false, axisLabelVisible: true, title: l.title })));
   }
   drawLines();
 
@@ -142,7 +138,7 @@ export function buildChart(host, D) {
   let cvdTimer = null;
   chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
     clearTimeout(cvdTimer);
-    cvdTimer = setTimeout(() => Object.values(paneSeries).flat().forEach(rec => { if (rec.def.cvd) rec.api.setData(cvdData(rec.raw)); }), 120);
+    cvdTimer = setTimeout(() => { if (!dead) Object.values(paneSeries).flat().forEach(rec => { if (rec.def.cvd) rec.api.setData(cvdData(rec.raw)); }); }, 120);
   });
 
   // ── helpers shared by layers / drawings
@@ -161,7 +157,11 @@ export function buildChart(host, D) {
     if (l >= n - 1) return C[n - 1].time + (l - (n - 1)) * STEP;
     const i = Math.floor(l), f = l - i; return C[i].time + f * (C[i + 1].time - C[i].time);
   }
-  const X = t => chart.timeScale().logicalToCoordinate(timeToLogical(t));
+  // time -> x pixel. Uses whole bars + bar spacing, because the library returns 0 for in-between positions.
+  const X = t => {
+    const tsc = chart.timeScale(), l = timeToLogical(t), i = Math.floor(l), x0 = tsc.logicalToCoordinate(i);
+    return x0 == null ? null : x0 + (l - i) * tsc.options().barSpacing;
+  };
   const Y = p => cs.priceToCoordinate(p);
   function hline(ctx, x1, x2, y, color, dash, w) {
     ctx.beginPath(); ctx.setLineDash(dash || []); ctx.strokeStyle = color; ctx.lineWidth = w || 1;
@@ -226,16 +226,50 @@ export function buildChart(host, D) {
     if (L.asia && D.asia) {
       const a = D.asia, x1 = X(a.start), x2 = X(a.end), yh = Y(a.hi), yl = Y(a.lo);
       if (x1 != null && x2 != null && yh != null && yl != null) {
-        ctx.fillStyle = 'rgba(149,152,161,0.10)'; ctx.fillRect(x1, yh, x2 - x1, yl - yh);
-        ctx.strokeStyle = 'rgba(149,152,161,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(x1, yh, x2 - x1, yl - yh);
-        hline(ctx, x2, W, yh, 'rgba(149,152,161,0.7)', [3, 3]); hline(ctx, x2, W, yl, 'rgba(149,152,161,0.7)', [3, 3]);
-        text(ctx, `Asia H ${fmt(a.hi)}`, x1 + 3, yh - 3, '#b2b5be'); text(ctx, `Asia L ${fmt(a.lo)}`, x1 + 3, yl + 12, '#b2b5be');
+        ctx.fillStyle = TH.box; ctx.fillRect(x1, yh, x2 - x1, yl - yh);
+        ctx.strokeStyle = TH.boxLine; ctx.lineWidth = 1; ctx.strokeRect(x1, yh, x2 - x1, yl - yh);
+        hline(ctx, x2, W, yh, TH.boxLine, [3, 3]); hline(ctx, x2, W, yl, TH.boxLine, [3, 3]);
+        text(ctx, `Asia H ${fmt(a.hi)}`, x1 + 3, yh - 3, TH.boxText); text(ctx, `Asia L ${fmt(a.lo)}`, x1 + 3, yl + 12, TH.boxText);
       }
     }
-    (D.opens || []).forEach(o => {
-      const y = Y(o.price); if (y == null) return;
-      let x = X(o.time); if (x == null) return; x = Math.max(0, x);
-      hline(ctx, x, W, y, o.color, [6, 3], 1.2); text(ctx, `${o.title} ${fmt(o.price)}`, x + 4, y - 3, o.color);
+    // economic news (CPI, PPI, FOMC, NFP…): dashed vertical line + label at the event time
+    if (L.news && D.news && D.news.length && STEP <= 14400) {
+      D.news.forEach((ev, k) => {
+        const x = X(ev.t); if (x == null || x < 0 || x > W) return;
+        const col = ev.impact === 'High' ? '#ef5350' : '#f9a825';
+        ctx.beginPath(); ctx.setLineDash([3, 4]); ctx.strokeStyle = col; ctx.globalAlpha = 0.7; ctx.lineWidth = 1;
+        ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+        ctx.font = '600 10.5px Inter, sans-serif';
+        const lbl = ev.short, w = ctx.measureText(lbl).width + 8, y = 52 + (k % 3) * 16;
+        ctx.fillStyle = col; ctx.fillRect(x - w / 2, y - 11, w, 15);
+        ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.fillText(lbl, x, y); ctx.textAlign = 'left';
+      });
+    }
+    // opens + key levels + trade plan: each line starts where the level was made and runs to the right edge.
+    // Levels at the same price share one line and one label.
+    const groups = new Map();
+    const add = (price, time, title, color, kind) => {
+      const k = price.toFixed(D.prec), g = groups.get(k);
+      if (g) { g.titles.push(title); g.time = Math.min(g.time, time); if (kind === 'plan') g.kind = 'plan'; }
+      else groups.set(k, { price, time, titles: [title], color, kind });
+    };
+    (D.opens || []).forEach(o => add(o.price, o.time, o.title, o.color, 'open'));
+    (D.levels || []).forEach(l => add(l.price, l.time != null ? l.time : C[0].time, l.title, l.color, 'level'));
+    const tPlan = C.length ? C[Math.max(0, C.length - 8)].time : 0;
+    (D.plan || []).forEach(p => add(p.price, tPlan, p.title, p.color, 'plan'));
+    const used = [];
+    groups.forEach(g => {
+      const y = Y(g.price); if (y == null) return;
+      let x = X(g.time); if (x == null) return; x = Math.max(0, x);
+      if (x > W) return;
+      const plan = g.kind === 'plan';
+      hline(ctx, x, W, y, g.color, plan ? (g.titles[0] === 'Entry' ? [] : [8, 4]) : g.kind === 'open' ? [6, 3] : [2, 3], plan ? 2 : 1.2);
+      ctx.beginPath(); ctx.fillStyle = g.color; ctx.arc(x, y, 2.5, 0, 7); ctx.fill();
+      let ty = y - 3;
+      while (used.some(u => Math.abs(u.y - ty) < 11 && Math.abs(u.x - x) < 140)) ty -= 11;
+      used.push({ x, y: ty });
+      const label = g.titles.join(' · ') + (g.kind === 'open' ? ' ' + fmt(g.price) : '');
+      text(ctx, label, x + 5, ty, g.color);
     });
   });
 
@@ -277,108 +311,8 @@ export function buildChart(host, D) {
   });
   chart.timeScale().subscribeVisibleLogicalRangeChange(() => { redrawLayers(); redrawVP(); });
 
-  // ── drawing tools (saved per market in this browser)
-  const DKEY = 'lof_draw_' + D.coin, FIB = [0, 0.5, 0.62, 0.705, 0.79, 1];
-  let shapes = [];
-  try { shapes = JSON.parse(localStorage.getItem(DKEY) || '[]'); } catch (e) { shapes = []; }
-  const saveShapes = () => { try { localStorage.setItem(DKEY, JSON.stringify(shapes)); } catch (e) { /* ignore */ } };
-  let tool = 'cursor', pending = [], hover = null, magnet = true;
-  const NEED = { h: 1, trend: 2, rect: 2, fib: 2, long: 3, short: 3 };
-  const hLines = new Map();
-  function seg(ctx, x1, y1, x2, y2, color, w, dash) { ctx.beginPath(); ctx.setLineDash(dash || []); ctx.strokeStyle = color; ctx.lineWidth = w || 1.5; ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.setLineDash([]); }
-  function label(ctx, txt, x, y, color, bg) {
-    ctx.font = '11px Inter, sans-serif'; const w = ctx.measureText(txt).width + 8;
-    if (bg) { ctx.fillStyle = bg; ctx.fillRect(x, y - 13, w, 16); }
-    ctx.fillStyle = color; ctx.fillText(txt, x + 4, y - 1);
-  }
-  function drawShape(ctx, s, W) {
-    if (s.type === 'h') return;
-    const x1 = X(s.t1), y1 = Y(s.p1); if (x1 == null || y1 == null) return;
-    if (s.type === 'trend') {
-      const x2 = X(s.t2), y2 = Y(s.p2); if (x2 == null || y2 == null) return;
-      seg(ctx, x1, y1, x2, y2, '#2962ff', 2);
-      [[x1, y1], [x2, y2]].forEach(([a, b]) => { ctx.beginPath(); ctx.fillStyle = '#2962ff'; ctx.arc(a, b, 3, 0, 7); ctx.fill(); });
-    } else if (s.type === 'rect') {
-      const x2 = X(s.t2), y2 = Y(s.p2); if (x2 == null || y2 == null) return;
-      ctx.fillStyle = 'rgba(41,98,255,0.15)'; ctx.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
-      ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1; ctx.strokeRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
-    } else if (s.type === 'fib') {
-      const pr = l => s.p2 + (s.p1 - s.p2) * l, ya = Y(pr(0.62)), yb = Y(pr(0.79));
-      if (ya != null && yb != null) { ctx.fillStyle = 'rgba(249,168,37,0.13)'; ctx.fillRect(x1, Math.min(ya, yb), W - x1, Math.abs(yb - ya)); }
-      FIB.forEach(l => {
-        const y = Y(pr(l)); if (y == null) return;
-        const c = (l === 0.62 || l === 0.705 || l === 0.79) ? '#f9a825' : l === 0.5 ? '#9598a1' : '#d1d4dc';
-        seg(ctx, x1, y, W, y, c, 1); label(ctx, `${l} (${fmt(pr(l))})`, x1, y, c);
-      });
-      const x2 = X(s.t2), y2 = Y(s.p2); if (x2 != null && y2 != null) seg(ctx, x1, y1, x2, y2, '#9598a1', 1, [4, 4]);
-    } else if (s.type === 'long' || s.type === 'short') {
-      let x2 = X(s.t2); if (x2 == null) return; if (x2 - x1 < 40) x2 = x1 + 120;
-      const ye = y1, ys = Y(s.p2), yt = Y(s.p3); if (ys == null || yt == null) return;
-      ctx.fillStyle = 'rgba(38,166,154,0.22)'; ctx.fillRect(x1, Math.min(ye, yt), x2 - x1, Math.abs(yt - ye));
-      ctx.fillStyle = 'rgba(239,83,80,0.22)'; ctx.fillRect(x1, Math.min(ye, ys), x2 - x1, Math.abs(ys - ye));
-      seg(ctx, x1, ye, x2, ye, '#d1d4dc', 1);
-      const risk = Math.abs(s.p1 - s.p2), rr = risk > 0 ? Math.abs(s.p3 - s.p1) / risk : 0;
-      label(ctx, `${s.type.toUpperCase()}  entry ${fmt(s.p1)}  R:R 1:${rr.toFixed(2)}`, x1 + 2, ye - 2, '#fff', 'rgba(15,19,28,0.85)');
-      label(ctx, `TP ${fmt(s.p3)} (${(Math.abs(s.p3 - s.p1) / s.p1 * 100).toFixed(2)}%)`, x1 + 2, yt + (yt < ye ? 14 : -2), UP);
-      label(ctx, `SL ${fmt(s.p2)} (${(risk / s.p1 * 100).toFixed(2)}%)`, x1 + 2, ys + (ys > ye ? -2 : 14), DN);
-    }
-  }
-  function previewShape() {
-    if (!pending.length || !hover) return null;
-    const pts = pending.concat([hover]), s = { type: tool, t1: pts[0].t, p1: pts[0].p };
-    if (tool === 'long' || tool === 'short') { s.p2 = pts[1] ? pts[1].p : hover.p; s.p3 = pts[2] ? pts[2].p : s.p1 + (s.p1 - s.p2) * 2; s.t2 = pts[pts.length - 1].t; }
-    else { s.t2 = pts[1].t; s.p2 = pts[1].p; }
-    return s;
-  }
-  const redrawShapes = primitive('top', ({ context: ctx, mediaSize }) => {
-    const W = paneW(mediaSize);
-    shapes.forEach(s => drawShape(ctx, s, W));
-    const pv = previewShape(); if (pv) { ctx.globalAlpha = 0.7; drawShape(ctx, pv, W); ctx.globalAlpha = 1; }
-    if (pending.length && tool !== 'cursor') pending.forEach(p => { const x = X(p.t), y = Y(p.p); if (x != null && y != null) { ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(x, y, 3, 0, 7); ctx.fill(); } });
-  });
-  const addH = s => hLines.set(s, cs.createPriceLine({ price: s.p1, color: '#2962ff', lineWidth: 1, lineStyle: LC.LineStyle.Solid, axisLabelVisible: true, title: '' }));
-  shapes.filter(s => s.type === 'h').forEach(addH);
-  function pointFrom(param) {
-    if (!param.point || param.logical == null || param.paneIndex !== 0) return null;
-    let p = cs.coordinateToPrice(param.point.y); if (p == null) return null;
-    if (magnet) {
-      const i = Math.round(param.logical);
-      if (i >= 0 && i < C.length) {
-        const c = C[i], near = [c.open, c.high, c.low, c.close].reduce((a, b) => Math.abs(b - p) < Math.abs(a - p) ? b : a);
-        const yy = Y(near); if (yy != null && Math.abs(yy - param.point.y) < 14) p = near;
-      }
-    }
-    return { t: logicalToTime(Math.round(param.logical)), p };
-  }
-  const tools = q('.lc-tools'), hint = q('.lc-hint');
-  const HINT = { h: 'Click a price', trend: 'Click 2 points', rect: 'Click 2 corners', fib: 'Click swing start, then swing end',
-    long: 'Click entry, then stop, then target', short: 'Click entry, then stop, then target' };
-  function setTool(t) {
-    tool = t; pending = []; hover = null;
-    tools.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
-    hint.textContent = HINT[t] || ''; hint.style.display = HINT[t] ? 'block' : 'none';
-    el.style.cursor = t === 'cursor' ? 'default' : 'crosshair'; redrawShapes();
-  }
-  function undo() { const s = shapes.pop(); if (!s) return; if (s.type === 'h' && hLines.has(s)) { cs.removePriceLine(hLines.get(s)); hLines.delete(s); } saveShapes(); redrawShapes(); }
-  function clearAll() { if (!shapes.length || !confirm('Delete all drawings for ' + D.coin + '?')) return; hLines.forEach(pl => cs.removePriceLine(pl)); hLines.clear(); shapes = []; saveShapes(); redrawShapes(); }
-  tools.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(tool === b.dataset.tool ? 'cursor' : b.dataset.tool));
-  const magBtn = tools.querySelector('[data-act=magnet]');
-  magBtn.classList.add('on');
-  magBtn.onclick = () => { magnet = !magnet; magBtn.classList.toggle('on', magnet); };
-  tools.querySelector('[data-act=undo]').onclick = undo;
-  tools.querySelector('[data-act=clear]').onclick = clearAll;
-  chart.subscribeClick(param => {
-    if (tool === 'cursor') return;
-    const pt = pointFrom(param); if (!pt) return;
-    pending.push(pt);
-    if (pending.length >= NEED[tool]) {
-      const s = { type: tool, t1: pending[0].t, p1: pending[0].p };
-      if (tool === 'long' || tool === 'short') { s.p2 = pending[1].p; s.p3 = pending[2].p; s.t2 = pending[2].t; }
-      else if (NEED[tool] === 2) { s.t2 = pending[1].t; s.p2 = pending[1].p; }
-      shapes.push(s); if (s.type === 'h') addH(s); saveShapes(); setTool('cursor');
-    }
-    redrawShapes();
-  });
+  // ── drawing tools (TradingView-style, saved per market in this browser)
+  const drawing = attachDrawing({ chart, cs, el, root: host, C, X, Y, timeToLogical, logicalToTime, fmt, coin: D.coin, primitive, LC, paneW, STEP });
 
   // ── legend (OHLC of the candle under the mouse)
   function showLegend(i) {
@@ -392,7 +326,7 @@ export function buildChart(host, D) {
       `<span style="color:${ch >= 0 ? UP : DN}">${ch >= 0 ? '+' : ''}${ch.toFixed(2)}%</span>` + (v ? ` <span>Vol <i>${abbr(v)}</i></span>` : '');
   }
   chart.subscribeCrosshairMove(param => {
-    if (tool !== 'cursor') { hover = pointFrom(param); redrawShapes(); }
+    drawing.onCrosshair(param);
     showLegend(param.logical == null ? null : Math.round(param.logical));
   });
   showLegend();
@@ -409,25 +343,34 @@ export function buildChart(host, D) {
     ts.setVisibleLogicalRange({ from: Math.max(0, C.length - 150), to: C.length + 6 });
   }
   function fullscreen() {
+    const box = host.closest('.chart-card') || wrap;          // the whole card, so timeframe and layer buttons stay usable
     if (document.fullscreenElement) document.exitFullscreen();
-    else (wrap.requestFullscreen || wrap.webkitRequestFullscreen).call(wrap);
+    else (box.requestFullscreen || box.webkitRequestFullscreen).call(box);
   }
   q('[data-act=zin]').onclick = () => zoom(0.8);
   q('[data-act=zout]').onclick = () => zoom(1.25);
   q('[data-act=reset]').onclick = reset;
+  q('[data-act=reset]').title = 'Reset chart (Alt+R or Ctrl+R)';
   q('[data-act=fs]').onclick = fullscreen;
   let over = false;
   wrap.addEventListener('mouseenter', () => { over = true; });
   wrap.addEventListener('mouseleave', () => { over = false; });
+  function scrollBars(n) { const r = ts.getVisibleLogicalRange(); if (r) ts.setVisibleLogicalRange({ from: r.from + n, to: r.to + n }); }
+  // TradingView shortcuts (mouse over the chart, or full screen)
   function onKey(e) {
-    if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
-    if (e.key === 'Escape') setTool('cursor');
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && over) { e.preventDefault(); undo(); return; }
-    if (!over && document.fullscreenElement !== wrap) return;
+    if (dead || (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName))) return;
+    if (!over && !(document.fullscreenElement && document.fullscreenElement.contains(wrap))) return;
+    if (drawing.onKey(e)) { e.preventDefault(); e.stopPropagation(); return; }
     const k = e.key;
-    if (k === '+' || k === '=') { e.preventDefault(); zoom(0.8); }
+    if ((e.altKey || e.ctrlKey || e.metaKey) && e.code === 'KeyR') { e.preventDefault(); e.stopPropagation(); reset(); }      // Alt+R / Ctrl+R reset chart
+    else if (k === '+' || k === '=') { e.preventDefault(); zoom(0.8); }
     else if (k === '-' || k === '_') { e.preventDefault(); zoom(1.25); }
     else if (k === '0' && !e.ctrlKey) { e.preventDefault(); reset(); }
+    else if (k === 'ArrowLeft') { e.preventDefault(); scrollBars(e.shiftKey ? -20 : -3); }
+    else if (k === 'ArrowRight') { e.preventDefault(); scrollBars(e.shiftKey ? 20 : 3); }
+    else if (k === 'ArrowUp' && !e.shiftKey) { e.preventDefault(); zoom(0.85); }
+    else if (k === 'ArrowDown' && !e.shiftKey) { e.preventDefault(); zoom(1.18); }
+    else if (k === 'Home' || (e.altKey && e.code === 'KeyG')) { e.preventDefault(); ts.scrollToRealTime(); }
   }
   window.addEventListener('keydown', onKey, true);
 
@@ -435,7 +378,7 @@ export function buildChart(host, D) {
   function paneAt(y) { let top = 0; for (const p of chart.panes()) { const h = p.getHeight(); if (y >= top && y < top + h) return { p, h }; top += h + 1; } return null; }
   let drag = null;
   el.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || tool !== 'cursor') return;
+    if (e.button !== 0 || drawing.busy() || e.shiftKey) return;
     const r = el.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
     if (x > r.width - cs.priceScale().width() || y > r.height - ts.height()) return;
     const hit = paneAt(y); if (!hit) return;
@@ -449,7 +392,7 @@ export function buildChart(host, D) {
     drag.moved = true;
     const shift = dy * (drag.vr.to - drag.vr.from) / drag.h, target = { from: drag.vr.from + shift, to: drag.vr.to + shift };
     drag.ps.applyOptions({ autoScale: false }); drag.ps.setVisibleRange(target);
-    requestAnimationFrame(() => drag && drag.ps.setVisibleRange(target));
+    requestAnimationFrame(() => { if (drag && !dead) drag.ps.setVisibleRange(target); });
   };
   const onUp = () => { drag = null; };
   window.addEventListener('pointermove', onMove, true);
@@ -470,11 +413,12 @@ export function buildChart(host, D) {
   const VKEY = 'lof_view_' + D.coin + '_' + D.tf;
   try {
     const sv = JSON.parse(localStorage.getItem(VKEY) || 'null');
-    if (sv && Date.now() - sv.ts < 6 * 3600e3) ts.setVisibleLogicalRange({ from: C.length - sv.r1, to: C.length - sv.r2 });
+    if (sv && Date.now() - sv.ts < 6 * 3600e3 && sv.r2 > -60 && sv.r1 - sv.r2 >= 10) ts.setVisibleLogicalRange({ from: C.length - sv.r1, to: C.length - sv.r2 });
     else ts.setVisibleLogicalRange({ from: Math.max(0, C.length - 150), to: C.length + 6 });
   } catch (e) { /* ignore */ }
   ts.subscribeVisibleLogicalRangeChange(r => {
     if (!r) return;
+    if (r.from < 15 && D.onNeedHistory && !dead) setTimeout(() => { if (!dead) D.onNeedHistory(); }, 0);      // scrolled to the left edge: load older candles
     try { localStorage.setItem(VKEY, JSON.stringify({ r1: C.length - r.from, r2: C.length - r.to, ts: Date.now() })); } catch (e) { /* ignore */ }
   });
 
@@ -483,6 +427,7 @@ export function buildChart(host, D) {
     chart, cs,
     // live candle from the websocket: {t,o,h,l,c,v}
     update(bar) {
+      if (dead) return;
       const n = C.length; if (!n) return;
       const lastT = C[n - 1].time;
       if (bar.t < lastT) return;
@@ -514,12 +459,13 @@ export function buildChart(host, D) {
       showLegend();
       redrawVP();
     },
-    setPane(key, idx, data) { const p = paneSeries[key]; if (p && p[idx]) setSeries(p[idx], data); },
+    setPane(key, idx, data) { if (dead) return; const p = paneSeries[key]; if (p && p[idx]) setSeries(p[idx], data); },
     hasPane: key => !!paneSeries[key],
-    setOverlays(o) { Object.assign(D, o); drawLines(); redrawLayers(); },
+    setOverlays(o) { if (dead) return; Object.assign(D, o); drawLines(); redrawLayers(); },
     lastTime: () => (C.length ? C[C.length - 1].time : 0),
     fullscreen,
     destroy() {
+      dead = true; clearTimeout(cvdTimer); drawing.destroy();
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('pointermove', onMove, true);
       window.removeEventListener('pointerup', onUp, true);

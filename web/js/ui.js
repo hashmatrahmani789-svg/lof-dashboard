@@ -204,7 +204,7 @@ export function renderMarkets(st, flowMeta, cbOk) {
     <div class="tbl-wrap"><table class="t"><thead><tr><th>Exchange</th><th>Market</th><th>Type</th><th>OI (USD)</th><th>Funding %</th></tr></thead><tbody>` +
       flowMeta.perps.map(p => {
         const f = flowMeta.snap && flowMeta.snap.fundingBy ? flowMeta.snap.fundingBy[p.symbol] : null;
-        return `<tr><td>${esc(p.exchange)}</td><td>${esc(p.pair)}</td><td>Perp · ${esc(p.margin)}${p.flow ? '' : ' (OI only)'}</td><td class="num">${fusd(p.oi)}</td><td class="num">${isNum(f) ? (f > 0 ? '+' : '') + f.toFixed(4) : '—'}</td></tr>`;
+        return `<tr><td>${esc(p.exchange)}</td><td>${esc(p.pair)}</td><td>Perp · ${esc(p.margin)} · ${p.cvd ? 'OI + CVD' : 'OI'}</td><td class="num">${fusd(p.oi)}</td><td class="num">${isNum(f) ? (f > 0 ? '+' : '') + f.toFixed(4) : '—'}</td></tr>`;
       }).join('') +
       flowMeta.spots.map(p => `<tr><td>${esc(p.exchange)}</td><td>${esc(p.pair)}</td><td>Spot (CVD)</td><td></td><td></td></tr>`).join('') +
       `</tbody></table></div><div class="muted" style="margin-top:6px">Coinalyze calls used in the last minute: ${flowMeta.calls ?? '—'}/40 (data is cached on the server for 1–2 minutes).</div>`;

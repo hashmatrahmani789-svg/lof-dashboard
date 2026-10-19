@@ -7,7 +7,7 @@ const TF = { '5m': ['5min', 300], '15m': ['15min', 900], '30m': ['30min', 1800],
 const PERP_PREF = ['binance', 'bybit', 'okx', 'bitget', 'hyperliquid', 'gate', 'deribit', 'bitmex', 'bingx', 'mexc', 'kucoin', 'htx', 'huobi'];
 const SPOT_PREF = ['binance', 'coinbase', 'bybit', 'okx', 'kraken', 'bitget'];
 const SPOT_QUOTES = new Set(['USDT', 'USD', 'USDC', 'FDUSD']);
-const MAX_PERPS = 6, MAX_SPOTS = 3, MAX_LIQ = 3, MAX_FUNDING = 4;   // keeps one coin load at ~22 of the 40 calls per minute
+const MAX_FLOW = 6, MAX_SPOTS = 3, MAX_LIQ = 3, MAX_FUNDING = 4;   // OI uses up to n markets (6–20); CVD uses the top 6
 
 const rank = (name, pref) => { const n = (name || '').toLowerCase(); const i = pref.findIndex(p => n.includes(p)); return i < 0 ? 99 : i; };
 
@@ -19,23 +19,21 @@ async function markets() {
   });
 }
 
-function pick({ names, fut, spot }, sym) {
+function pick({ names, fut, spot }, sym, maxPerps) {
   const exName = m => names[m.exchange] || m.exchange;
   const main = fut.find(m => m.is_perpetual && /binance/i.test(exName(m)) && m.symbol_on_exchange === sym)
             || fut.find(m => m.is_perpetual && m.symbol_on_exchange === sym);
   const base = main ? main.base_asset : sym.replace(/(USDT|USDC|USD)$/, '').replace(/^1000+/, '');
-  // Perps: one per exchange + margin type (USDT-margined and coin-margined), best exchanges first.
+  // Perps for OI: the biggest exchanges first, every contract type (USDT, coin-margined, USDC), then other exchanges.
+  const kind = m => m.margined === 'STABLE' ? (m.quote_asset === 'USDT' ? 0 : 2) : 1;
+  const all = fut.filter(m => m.base_asset === base && m.is_perpetual)
+    .sort((a, b) => rank(exName(a), PERP_PREF) - rank(exName(b), PERP_PREF) || kind(a) - kind(b));
+  // first pass: one main contract per top exchange, so a small n still covers the most exchanges
   const perps = [], seen = new Set();
-  fut.filter(m => m.base_asset === base && m.is_perpetual && m.has_ohlcv_data)
-    .sort((a, b) => rank(exName(a), PERP_PREF) - rank(exName(b), PERP_PREF)
-      || (a.margined === 'STABLE' ? 0 : 1) - (b.margined === 'STABLE' ? 0 : 1)
-      || (a.quote_asset === 'USDT' ? 0 : 1) - (b.quote_asset === 'USDT' ? 0 : 1))
-    .forEach(m => {
-      const k = m.exchange + '|' + (m.margined === 'STABLE' ? 'S' : 'C');
-      if (seen.has(k) || perps.length >= MAX_PERPS || rank(exName(m), PERP_PREF) === 99) return;
-      seen.add(k); perps.push(m);
-    });
-  if (main && !perps.includes(main)) { perps.unshift(main); if (perps.length > MAX_PERPS) perps.pop(); }
+  all.forEach(m => { if (perps.length < maxPerps && !seen.has(m.exchange) && rank(exName(m), PERP_PREF) < 99) { seen.add(m.exchange); perps.push(m); } });
+  all.forEach(m => { if (perps.length < maxPerps && !perps.includes(m)) perps.push(m); });
+  if (main && !perps.includes(main)) { perps.unshift(main); if (perps.length > maxPerps) perps.pop(); }
+  if (main) { perps.splice(perps.indexOf(main), 1); perps.unshift(main); }
   const spots = [], seenS = new Set();
   spot.filter(m => m.base_asset === base && SPOT_QUOTES.has(m.quote_asset) && m.has_buy_sell_data)
     .sort((a, b) => rank(exName(a), SPOT_PREF) - rank(exName(b), SPOT_PREF))
@@ -44,7 +42,7 @@ function pick({ names, fut, spot }, sym) {
       seenS.add(m.exchange); spots.push(m);
     });
   const info = m => ({ symbol: m.symbol, exchange: exName(m), pair: m.symbol_on_exchange,
-    margin: m.margined === 'STABLE' ? 'USDT/USDC' : m.margined === 'COIN' ? 'coin' : (m.margined || ''),
+    margin: m.margined === 'STABLE' ? (m.quote_asset || 'USDT') : m.margined === 'COIN' ? 'coin' : (m.margined || ''),
     denom: m.oi_lq_vol_denominated_in || 'BASE_ASSET', ls: !!m.has_long_short_ratio_data, flow: !!m.has_buy_sell_data });
   return { base, perps: perps.map(info), spots: spots.map(info) };
 }
@@ -103,15 +101,15 @@ function fundingScale(vals) {
   return v[Math.floor(v.length / 2)] < 0.002 ? 100 : 1;     // decimal → percent
 }
 
-async function load(sym, tf, bars, snap, liq, parts) {
+async function load(sym, tf, bars, snap, liq, parts, n) {
   const mk = await markets();
-  const sel = pick(mk, sym);
+  const sel = pick(mk, sym, n);
   if (!sel.perps.length) throw Object.assign(new Error(`Coinalyze has no perpetual markets for ${sym}.`), { status: 404 });
   const [interval, sec] = TF[tf];
   const now = Math.floor(Date.now() / 1000);
   const span = { interval, from: now - sec * bars, to: now };
   const perpSyms = sel.perps.map(p => p.symbol);
-  const flowSyms = sel.perps.filter(p => p.flow).map(p => p.symbol);
+  const flowSyms = sel.perps.filter(p => p.flow).slice(0, MAX_FLOW).map(p => p.symbol);
   const spotSyms = sel.spots.map(p => p.symbol);
   const main = sel.perps[0];
   const lsSym = (sel.perps.find(p => p.ls) || {}).symbol;
@@ -136,7 +134,7 @@ async function load(sym, tf, bars, snap, liq, parts) {
   const lastOI = Object.fromEntries(Object.entries(oiBy).map(([s, h]) => [s, h.length ? +h[h.length - 1].c : 0]));
   const out = {
     sym, base: sel.base, tf, at: now,
-    perps: sel.perps.map(p => ({ ...p, oi: lastOI[p.symbol] || 0 })), spots: sel.spots,
+    perps: sel.perps.map(p => ({ ...p, oi: lastOI[p.symbol] || 0, cvd: flowSyms.includes(p.symbol) })), spots: sel.spots,
     oi: sumOI(oiBy),
     perp: sumDelta(hist(R.perp), denomOf),
     spot: sumDelta(hist(R.spot), () => 'BASE_ASSET'),
@@ -169,11 +167,12 @@ export default async function handler(req, res) {
   const tf = TF[q.tf] ? q.tf : '15m';
   const bars = Math.min(Math.max(parseInt(q.bars || '400', 10) || 400, 50), 1000);
   const snap = q.snap === '1', liq = q.liq === '1';
+  const n = Math.min(Math.max(parseInt(q.n || '12', 10) || 12, 3), 20);
   const parts = new Set(String(q.parts || 'oi,perp,spot').split(',').filter(x => ['oi', 'perp', 'spot'].includes(x)));
   if (!sym) return send(res, 400, { error: 'sym is required, e.g. BTCUSDT' });
   const ttl = TF[tf][1] <= 900 ? 60 : 120;
   try {
-    const data = await cached(`cz:${sym}:${tf}:${bars}:${snap}:${liq}:${[...parts].sort()}`, ttl * 1000, () => load(sym, tf, bars, snap, liq, parts));
+    const data = await cached(`cz:${sym}:${tf}:${bars}:${snap}:${liq}:${[...parts].sort()}:${n}`, ttl * 1000, () => load(sym, tf, bars, snap, liq, parts, n));
     send(res, 200, { ...data, calls: callsLastMinute() }, ttl);
   } catch (e) {
     send(res, e.status && e.status < 600 ? e.status : 502, { error: String(e.message || e), calls: callsLastMinute() });

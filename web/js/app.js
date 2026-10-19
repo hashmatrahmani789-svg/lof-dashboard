@@ -11,26 +11,28 @@ const { $, esc, toast } = UI;
 const OPENS = [['Daily open', 'd_open', '#e0e0e0'], ['NY midnight', 'ny_mid', '#00bcd4'], ['London open', 'ldn_open', '#5b7fff'],
   ['NY open', 'ny_open', '#ff9800'], ['Weekly open', 'w_open', '#ce93d8'], ['Monthly open', 'm_open', '#8d6e63']];
 const LINE_LAYERS = ['EMA 12', 'EMA 21', 'EMA 50', 'Impulse candles', 'Volume MA', 'Levels', ...OPENS.map(o => o[0]), 'Trade plan'];
-const ZONE_LAYERS = ['Asia range', 'Sessions', 'VP prev day', 'VP prev week', 'VP visible range'];
+const ZONE_LAYERS = ['Asia range', 'Sessions', 'VP prev day', 'VP prev week', 'VP visible range', 'News (CPI, FOMC…)'];
 const PANES = [['oi', 'OI'], ['perp', 'Perp CVD'], ['spot', 'Spot CVD'], ['cvd2', 'Perp vs spot CVD'], ['vol', 'Volume'],
-  ['liq', 'Liquidations'], ['cbp', 'Coinbase premium']];
+  ['liq', 'Liquidations'], ['cbp', 'Coinbase premium'], ['fng', 'Fear & Greed']];
 const SIZES = { S: 380, M: 520, L: 700, XL: 900 };
 const IMPULSE = { Strict: 2.5, Normal: 2.0, Loose: 1.5 };
 const TFS = ['5m', '15m', '30m', '1h', '2h', '4h', '12h', '1D'];
 const DEFAULTS = {
   asset: 'BTC', ltf: '15m', tf: '15m',
   lines: ['EMA 12', 'EMA 21', 'EMA 50', 'Impulse candles', 'Volume MA', 'Levels', 'Daily open', 'NY midnight', 'London open', 'NY open', 'Weekly open', 'Trade plan'],
-  zones: ['Asia range', 'Sessions', 'VP prev day', 'VP prev week'],
+  zones: ['Asia range', 'Sessions', 'VP prev day', 'VP prev week', 'News (CPI, FOMC…)'],
   panes: ['oi', 'cvd2', 'vol'], size: 'M', impulse: 'Normal',
   watch: ['BTC', 'ETH', 'SOL', 'GOLD', 'SILVER', 'SPX', 'NDX'],
   params: { piv: 3, valid: 20, minRR: 2, minScore: 7 },
-  alerts: { browser: false, telegram: false }, cgId: {},
+  alerts: { browser: false, telegram: false }, cgId: {}, theme: 'dark', oiMarkets: 12,
 };
 const CFG_KEY = 'lof_cfg_v2';
+const VERSION = 'v6';
 let cfg;
 try { cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { cfg = Object.assign({}, DEFAULTS); }
 cfg.params = Object.assign({}, DEFAULTS.params, cfg.params);
 cfg.alerts = Object.assign({}, DEFAULTS.alerts, cfg.alerts);
+if (!cfg.seenNews) { if (!cfg.zones.includes('News (CPI, FOMC…)')) cfg.zones = cfg.zones.concat(['News (CPI, FOMC…)']); cfg.seenNews = true; }
 const saveCfg = () => { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* ignore */ } };
 
 // ── state ───────────────────────────────────────────────────
@@ -105,16 +107,19 @@ function updateStatus() {
   let c = 'g', label = 'Live';
   if (S.priceErr) { c = 'r'; label = 'Price error'; }
   else if (S.tradfi) { c = tickAge < 120 ? 'g' : 'y'; label = tickAge < 120 ? 'Updated' : 'Stale'; }
-  else if (S.wsState !== 'live') { c = 'y'; label = S.wsState === 'reconnecting' ? 'Reconnecting' : 'Connecting'; }
+  else if (S.wsState !== 'live' && S.wsState !== 'polling') { c = 'y'; label = S.wsState === 'reconnecting' ? 'Reconnecting' : 'Connecting'; }
+  else if (tickAge > 20) { c = 'y'; label = 'No ticks'; }
+  else if (S.wsState === 'polling') label = 'Live · 2s';
   else if (S.flow && S.flow.error) { c = 'y'; label = 'Flow error'; }
   else if (flowAge > 240) { c = 'y'; label = S.flow ? 'Flow stale' : 'Loading flow'; }
   dot.className = 'dot ' + c; txt.textContent = label;
   const lines = [];
   lines.push(S.tradfi ? `<b>Price:</b> Yahoo Finance (${esc(S.ticker)}) · polled every 30s · last update ${UI.ago(tickAge)} ago`
-    : `<b>Price:</b> Binance futures websocket · ${S.wsState} · last trade ${UI.ago(tickAge)} ago`);
+    : `<b>Price:</b> Binance futures · ${S.wsState === 'polling' ? 'updating every 2 s (websocket blocked on this network)' : S.wsState === 'live' ? 'live websocket' : S.wsState} · last update ${UI.ago(tickAge)} ago`);
   if (S.priceErr) lines.push(`<span class="dn">${esc(S.priceErr)}</span>`);
   if (!S.tradfi) lines.push(S.flow && S.flow.error ? `<b>Order flow:</b> <span class="dn">${esc(S.flow.error)}</span>` :
     `<b>Order flow:</b> Coinalyze · updated ${UI.ago(flowAge)} ago · refreshes every 60s${S.flow && S.flow.calls != null ? ` · calls ${S.flow.calls}/40 per min` : ''}`);
+  lines.push(`<b>Version:</b> ${VERSION}`);
   lines.push(`<b>Screener:</b> ${S.scanAt ? 'scanned ' + UI.ago(now - S.scanAt) + ' ago' : 'starting'} · every 3 min`);
   if (S.server) lines.push(`<b>Telegram:</b> ${S.server.telegram ? 'set up' : 'not set up'} · <b>Notion:</b> ${S.server.notion ? 'set up' : 'not set up'}`);
   el.querySelector('.tip').innerHTML = lines.join('<br>');
@@ -127,15 +132,15 @@ function overlays(r) {
   const opens = OPENS.filter(([n, k]) => lines.includes(n) && r.opens[k]).map(([n, k, c]) => ({ title: n, price: r.opens[k].price, time: r.opens[k].time, color: c }));
   const levels = !lines.includes('Levels') ? [] : [['pwh', '#ef5350', 'PWH'], ['pdh', '#ef5350', 'PDH'], ['pd_poc', '#f9a825', 'D POC'],
     ['pw_poc', '#ab47bc', 'W POC'], ['pdl', '#26a69a', 'PDL'], ['pwl', '#26a69a', 'PWL']]
-    .filter(([k]) => isNum(r.levels[k])).map(([k, c, t]) => ({ price: r.levels[k], color: c, title: t }));
+    .filter(([k]) => isNum(r.levels[k])).map(([k, c, t]) => ({ price: r.levels[k], color: c, title: t, time: r.level_t ? r.level_t[k] : null }));
   const plan = !lines.includes('Trade plan') || r.setup === 'NONE' ? [] :
     [['Entry', r.price, '#d1d4dc'], ['SL', r.sl, '#ef5350'], ['TP1', r.tp1, '#26a69a'], ['TP2', r.tp2, '#26a69a']]
       .filter(x => isNum(x[1])).map(([t, p, c]) => ({ title: t, price: p, color: c }));
-  return { opens, plan, levels, asia: r.asia, profiles: r.profiles };
+  return { opens, plan, levels, asia: r.asia, profiles: r.profiles, news: X.newsForChart() };
 }
 
 function chartPanes() {
-  const keys = S.tradfi ? cfg.panes.filter(k => k === 'vol') : cfg.panes;
+  const keys = S.tradfi ? cfg.panes.filter(k => k === 'vol' || k === 'fng') : cfg.panes;
   const out = [];
   PANES.forEach(([k, name]) => {
     if (!keys.includes(k)) return;
@@ -150,9 +155,27 @@ function chartPanes() {
       out.push({ key: k, series: s });
     }
     if (k === 'liq') out.push({ key: k, series: [{ kind: 'hist', name: 'Long liqs', color: '#ef5350', data: [] }, { kind: 'hist', name: 'Short liqs', color: '#26a69a', data: [] }] });
+    if (k === 'fng') out.push({ key: k, series: [{ kind: 'line', name: 'Fear & Greed', color: '#f9a825', data: [], fmt: v => v.toFixed(0), minMove: 1 }] });
     if (k === 'cbp') out.push({ key: k, series: [{ kind: 'hist', name: 'Coinbase premium %', color: '#f9a825', data: [], fmt: v => v.toFixed(3) + '%', minMove: 0.001 }] });
   });
   return out;
+}
+
+// Higher chart timeframes (up to 4h) are built from the entry-timeframe order flow, so they cost no extra Coinalyze calls.
+const canResample = (tf, ltf) => API.TF_SEC[tf] > API.TF_SEC[ltf] && API.TF_SEC[tf] % API.TF_SEC[ltf] === 0 && API.TF_SEC[tf] <= 14400;
+function resampleFlow(f, sec) {
+  if (!f || f.error) return f;
+  const bucket = t => Math.floor(t / sec) * sec;
+  const sumRows = rows => { const m = new Map(); (rows || []).forEach(r => { const k = bucket(r[0]), c = m.get(k); if (c) { for (let i = 1; i < r.length; i++) c[i] += r[i]; } else m.set(k, [k, ...r.slice(1)]); }); return [...m.values()]; };
+  const oi = new Map();
+  (f.oi || []).forEach(r => { const k = bucket(r[0]), c = oi.get(k); if (c) { c[2] = Math.max(c[2], r[2]); c[3] = Math.min(c[3], r[3]); c[4] = r[4]; } else oi.set(k, [k, r[1], r[2], r[3], r[4]]); });
+  return Object.assign({}, f, { oi: [...oi.values()], perp: sumRows(f.perp), spot: sumRows(f.spot), liq: f.liq ? sumRows(f.liq) : undefined });
+}
+function chartFlow() {
+  if (S.tradfi) return null;
+  if (cfg.tf === cfg.ltf) return S.flow;
+  if (canResample(cfg.tf, cfg.ltf)) return resampleFlow(S.flow, API.TF_SEC[cfg.tf]);
+  return S.flowChart;
 }
 
 function fillPanes() {
@@ -165,7 +188,7 @@ function fillPanes() {
     for (let i = 19; i < v.length; i++) { let s = 0; for (let j = i - 19; j <= i; j++) s += v[j].value; ma.push({ time: v[i].time, value: s / 20 }); }
     ch.setPane('vol', 1, ma);
   }
-  const f = S.flowChart;
+  const f = chartFlow();
   if (f && !f.error) {
     const after = rows => (rows || []).filter(r => r[0] >= t0);
     ch.setPane('oi', 0, after(f.oi).map(r => ({ time: r[0], open: r[1], high: r[2], low: r[3], close: r[4] })));
@@ -175,6 +198,13 @@ function fillPanes() {
       ch.setPane('liq', 0, after(f.liq).map(r => ({ time: r[0], value: -r[1], color: '#ef5350' })));
       ch.setPane('liq', 1, after(f.liq).map(r => ({ time: r[0], value: r[2], color: '#26a69a' })));
     }
+  }
+  if (S.fng && ch.hasPane('fng')) {
+    // daily index shown as a step line on any timeframe
+    const pts = [], days = S.fng;
+    let j = 0;
+    bars.forEach(b => { while (j + 1 < days.length && days[j + 1].t <= b.t) j++; if (days[j] && days[j].t <= b.t) pts.push({ time: b.t, value: days[j].v }); });
+    ch.setPane('fng', 0, pts);
   }
   if (S.cbp) ch.setPane('cbp', 0, S.cbp.filter(p => p.time >= t0).map(p => Object.assign({}, p, { color: p.value >= 0 ? '#26a69a' : '#ef5350' })));
 }
@@ -192,19 +222,20 @@ function buildChartNow() {
   host.style.height = chartHeight(panes.length) + 'px';
   const L = cfg.lines, Z = cfg.zones;
   S.chart = buildChart(host, Object.assign({
-    coin: S.asset, tf: cfg.tf, prec: S.prec, source: S.tradfi ? 'Yahoo · ' + S.ticker : 'Binance · ' + S.sym,
+    coin: S.asset, tf: cfg.tf, prec: S.prec, theme: cfg.theme, source: S.tradfi ? 'Yahoo · ' + S.ticker : 'Binance · ' + S.sym,
     candles: S.chartBars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })),
     vol: S.chartBars.map(b => b.v || 0),
     impulseMult: IMPULSE[cfg.impulse] || 2,
     layers: { ema12: L.includes('EMA 12'), ema21: L.includes('EMA 21'), ema50: L.includes('EMA 50'), impulse: L.includes('Impulse candles'),
       asia: Z.includes('Asia range'), sessions: Z.includes('Sessions'), vp_day: Z.includes('VP prev day'), vp_week: Z.includes('VP prev week'),
-      vp_visible: Z.includes('VP visible range') },
+      vp_visible: Z.includes('VP visible range'), news: Z.includes('News (CPI, FOMC…)') },
     panes,
+    onNeedHistory: () => loadOlder(),
   }, overlays(S.r)));
   fillPanes();
   $('#chartFoot').innerHTML = S.tradfi
     ? `Yahoo Finance · ${esc(S.ticker)} · updates every 30 s · scroll / + − to zoom · drag (also up/down) · wheel on price axis to stretch · double-click axis to reset · keys 1–8 timeframe, F full screen`
-    : `Binance ${esc(S.sym)} perpetual · live · OI / CVD / liquidations: Coinalyze (${S.flowChart && S.flowChart.perps ? S.flowChart.perps.length + ' perp + ' + S.flowChart.spots.length + ' spot markets' : 'loading'}) · CVD starts at 0 on the first visible candle · keys 1–8 timeframe, F full screen, / search`;
+    : `Binance ${esc(S.sym)} perpetual · live · OI / CVD / liquidations: Coinalyze (OI from ${cfg.oiMarkets} perp markets, CVD from the top 6 perp + 3 spot) · CVD starts at 0 on the first visible candle · scroll left for more history · keys 1–8 timeframe, F full screen, / search · ${VERSION}`;
 }
 
 async function loadChart(g) {
@@ -212,6 +243,7 @@ async function loadChart(g) {
   clearTimers(S.chartTimers);
   if (S.ws) { S.ws.close(); S.ws = null; }
   $('#chart').innerHTML = '<div class="loading">Loading chart…</div>';
+  S.noMoreHistory = false;
   try {
     S.chartBars = S.tradfi ? await API.yahooBars(S.ticker, tf) : await API.klines(S.sym, tf, 1000);
     S.priceErr = null;
@@ -223,8 +255,9 @@ async function loadChart(g) {
   }
   if (g !== S.gen || tf !== cfg.tf) return;
   S.lastTick = Date.now() / 1000;
-  S.flowChart = tf === cfg.ltf && S.flow ? S.flow : null;
+  S.flowChart = null;
   buildChartNow();
+  loadFullHistory(g, tf);
   if (S.tradfi) {
     every(async () => {
       try {
@@ -237,9 +270,9 @@ async function loadChart(g) {
   } else {
     S.wsState = 'connecting';
     S.ws = API.liveKlines(S.sym, tf, bar => { if (g === S.gen && tf === cfg.tf) applyBar(bar, tf); }, s => { S.wsState = s; updateStatus(); });
-    if (tf !== cfg.ltf) loadChartFlow(g);          // same timeframe: the entry-timeframe data fills the panes
+    if (tf !== cfg.ltf && !canResample(tf, cfg.ltf)) loadChartFlow(g);   // otherwise the entry-timeframe data fills the panes
     if (cfg.panes.includes('cbp')) loadCbp(g);
-    every(() => { if (tf !== cfg.ltf) loadChartFlow(g); if (cfg.panes.includes('cbp')) loadCbp(g); }, 60000, S.chartTimers);
+    every(() => { if (tf !== cfg.ltf && !canResample(tf, cfg.ltf)) loadChartFlow(g); if (cfg.panes.includes('cbp')) loadCbp(g); }, 60000, S.chartTimers);
   }
 }
 
@@ -259,6 +292,41 @@ function applyBar(bar, tf) {
   }
 }
 
+// Older candles when you scroll to the left edge (like TradingView), back to the day the market was listed.
+// On 4h / 12h / 1D the full history loads straight away.
+const MAX_BARS = 60000;
+let loadingOlder = false;
+async function fetchOlder(g, tf) {
+  const first = S.chartBars[0].t;
+  const older = (await API.klines(S.sym, tf, 1500, first * 1000 - 1)).filter(b => b.t < first);
+  if (g !== S.gen || tf !== cfg.tf) return false;
+  if (!older.length) { S.noMoreHistory = true; return false; }
+  S.chartBars = older.concat(S.chartBars);
+  if (older.length < 1400) S.noMoreHistory = true;          // reached the listing date
+  return true;
+}
+async function loadOlder() {
+  if (loadingOlder || S.tradfi || S.noMoreHistory || !S.chartBars.length || S.chartBars.length >= MAX_BARS) return;
+  loadingOlder = true;
+  const g = S.gen, tf = cfg.tf;
+  try { if (await fetchOlder(g, tf)) buildChartNow(); }
+  catch (e) { /* try again on the next scroll */ }
+  finally { setTimeout(() => { loadingOlder = false; }, 400); }
+}
+async function loadFullHistory(g, tf) {
+  if (S.tradfi || !['4h', '12h', '1D'].includes(tf)) return;
+  loadingOlder = true;
+  let added = false;
+  try {
+    for (let i = 0; i < 12 && !S.noMoreHistory && S.chartBars.length < MAX_BARS; i++) {
+      if (!(await fetchOlder(g, tf))) break;
+      added = true;
+    }
+  } catch (e) { /* keep what we have */ }
+  loadingOlder = false;
+  if (added && g === S.gen && tf === cfg.tf) buildChartNow();
+}
+
 async function loadChartFlow(g) {
   const tf = cfg.tf;
   try {
@@ -267,7 +335,7 @@ async function loadChartFlow(g) {
     if (P.includes('perp') || P.includes('cvd2')) parts.push('perp');
     if (P.includes('spot') || P.includes('cvd2')) parts.push('spot');
     if (!parts.length && !P.includes('liq')) { S.flowChart = null; return; }
-    const f = await API.czFlow(S.sym, tf, { liq: P.includes('liq'), parts });
+    const f = await API.czFlow(S.sym, tf, { liq: P.includes('liq'), parts, n: cfg.oiMarkets });
     if (g !== S.gen || tf !== cfg.tf) return;
     S.flowChart = f;
   } catch (e) {
@@ -352,14 +420,14 @@ async function loadAnalysisBars(g, which = 'all') {
 async function loadFlow(g) {
   const ltf = cfg.ltf;
   try {
-    const f = await API.czFlow(S.sym, ltf, { snap: true, liq: true });
+    const f = await API.czFlow(S.sym, ltf, { snap: true, liq: true, bars: 1000, n: cfg.oiMarkets });
     if (g !== S.gen || ltf !== cfg.ltf) return;
     S.flow = f;
   } catch (e) {
     if (g !== S.gen) return;
     S.flow = { error: e.message };
   }
-  if (cfg.tf === cfg.ltf) { S.flowChart = S.flow; fillPanes(); }
+  fillPanes();
   runAnalysis();
   updateStatus();
 }
@@ -443,7 +511,7 @@ function setLtf(ltf) {
   const g = S.gen;
   loadAnalysisBars(g, 'ltf');
   if (!S.tradfi) loadFlow(g);
-  if (cfg.tf !== ltf && !S.tradfi) loadChartFlow(g);
+  if (cfg.tf !== ltf && !S.tradfi && !canResample(cfg.tf, ltf)) loadChartFlow(g);
 }
 
 function renderBar() {
@@ -464,7 +532,7 @@ function renderBar() {
   document.querySelectorAll('[data-p]').forEach(b => b.onclick = () => {
     cfg.panes = toggle(cfg.panes, b.dataset.p); saveCfg(); renderBar();
     if (b.dataset.p === 'cbp' && cfg.panes.includes('cbp') && !S.tradfi) loadCbp(S.gen);
-    if (cfg.panes.includes(b.dataset.p) && b.dataset.p !== 'cbp' && b.dataset.p !== 'vol' && !S.tradfi && cfg.tf !== cfg.ltf) loadChartFlow(S.gen);
+    if (cfg.panes.includes(b.dataset.p) && b.dataset.p !== 'cbp' && b.dataset.p !== 'vol' && !S.tradfi && cfg.tf !== cfg.ltf && !canResample(cfg.tf, cfg.ltf)) loadChartFlow(S.gen);
     buildChartNow();
   });
   document.querySelectorAll('[data-l]').forEach(b => b.onclick = () => { cfg.lines = toggle(cfg.lines, b.dataset.l); saveCfg(); renderBar(); buildChartNow(); });
@@ -551,6 +619,9 @@ function openSettings() {
     <div class="field"><span>Sweep / MSS valid for (bars)</span><input type="number" id="sValid" min="5" max="60" value="${p.valid}"></div>
     <div class="field"><span>Minimum R:R</span><input type="number" id="sRR" min="0.5" max="10" step="0.1" value="${p.minRR}"></div>
     <div class="field"><span>Minimum score (of 9)</span><input type="number" id="sScore" min="1" max="9" value="${p.minScore}"></div>
+    <h4>Order flow coverage (Coinalyze)</h4>
+    <div class="field"><span>OI from how many perp markets</span><div class="seg" id="oiN">${[6, 12, 20].map(n => `<button data-n="${n}" class="${cfg.oiMarkets === n ? 'on' : ''}">${n}</button>`).join('')}</div></div>
+    <div class="muted" style="font-size:11.5px">20 = closest to coinalyze.net's aggregated OI, but uses more of the 40 calls per minute, so switching coins quickly can be slower. CVD always uses the top 6 perp + 3 spot markets.</div>
     <h4>Alerts (when a market turns LONG / SHORT READY)</h4>
     <div class="field"><span>Browser notification</span><input type="checkbox" id="aBrowser" ${cfg.alerts.browser ? 'checked' : ''}></div>
     <div class="field"><span>Telegram ${sv.telegram ? '' : '<span class="muted">(not set up, see README)</span>'}</span><input type="checkbox" id="aTg" ${cfg.alerts.telegram ? 'checked' : ''} ${sv.telegram ? '' : 'disabled'}></div>
@@ -581,16 +652,35 @@ function openSettings() {
     cfg.alerts.browser = e.target.checked; saveCfg();
   };
   $('#aTg').onchange = e => { cfg.alerts.telegram = e.target.checked; saveCfg(); };
+  $('#oiN').querySelectorAll('[data-n]').forEach(b => b.onclick = () => { cfg.oiMarkets = +b.dataset.n; saveCfg(); openSettings(); loadAsset(S.asset); });
   $('#aTest').onclick = async () => { try { await API.sendTelegram('✅ LOF Dashboard test message'); toast('Test message sent.'); } catch (e) { toast('Telegram error: ' + esc(e.message)); } };
   const cgI = $('#cgId'); if (cgI) cgI.onchange = e => { cfg.cgId[S.asset] = e.target.value.trim(); saveCfg(); S.ov = undefined; loadOverview(S.gen); };
   $('#rLayout').onclick = () => { Object.assign(cfg, { lines: DEFAULTS.lines, zones: DEFAULTS.zones, panes: DEFAULTS.panes, size: 'M', impulse: 'Normal' }); saveCfg(); renderBar(); buildChartNow(); };
   $('#logout').onclick = () => { document.cookie = 'lof_auth=; Max-Age=0; path=/'; };
 }
 $('#btnSettings').onclick = openSettings;
+function applyTheme() {
+  document.body.classList.toggle('light', cfg.theme === 'light');
+  $('#btnTheme').textContent = cfg.theme === 'light' ? '☾' : '☀';
+  document.querySelector('meta[name=theme-color]').content = cfg.theme === 'light' ? '#f4f6f9' : '#0b0e14';
+}
+$('#btnTheme').onclick = () => { cfg.theme = cfg.theme === 'light' ? 'dark' : 'light'; saveCfg(); applyTheme(); buildChartNow(); };
+applyTheme();
 
 // ── start ───────────────────────────────────────────────────
+async function loadFng() {
+  try {
+    const j = await API.fngHistory();
+    S.fng = (j.data || []).map(x => ({ t: +x.timestamp, v: +x.value })).sort((a, b) => a.t - b.t);
+    fillPanes();
+  } catch (e) { /* optional */ }
+}
+
 async function start() {
   renderBar();
+  window.__onNews = () => { if (S.chart) S.chart.setOverlays({ news: X.newsForChart() }); };
+  loadFng(); setInterval(loadFng, 3600e3);
+  const brand = document.querySelector('.brand span'); if (brand) brand.textContent = 'Confluence ' + VERSION;
   X.updateClock(); X.loadNews();
   setInterval(() => { X.updateClock(); X.updateNews(); }, 20000);
   setInterval(X.loadNews, 30 * 60000);
@@ -608,8 +698,8 @@ async function start() {
   X.renderScreener([], S.asset, loadAsset, 'Scanning watchlist…');
   setTimeout(runScan, 2500);
   setInterval(() => { if (document.visibilityState === 'visible' || cfg.alerts.browser || cfg.alerts.telegram) runScan(); }, 180000);
-  X.renderPulse(null, loadAsset);
-  const pulse = () => X.loadPulse().then(p => X.renderPulse(p, loadAsset)).catch(() => {});
+  X.renderPulse(null, loadAsset); X.renderStrip(null, loadAsset);
+  const pulse = () => X.loadPulse().then(p => { X.renderPulse(p, loadAsset); X.renderStrip(p, loadAsset); }).catch(() => {});
   setTimeout(pulse, 1500); setInterval(pulse, 300000);
   const evalH = async () => { const h = await X.evaluateHistory(); if (!$('#tab-history').hidden) X.renderHistory(h, loadAsset); };
   setTimeout(evalH, 8000); setInterval(evalH, 300000);

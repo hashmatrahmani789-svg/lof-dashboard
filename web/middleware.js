@@ -1,6 +1,6 @@
 // Password protection for the whole site. Set APP_PASSWORD in Vercel → Settings → Environment Variables.
 export const config = {
-  matcher: ['/((?!login\\.html|api/login|favicon\\.svg|manifest\\.json).*)'],
+  matcher: ['/((?!login\\.html|api/login|api/scan|favicon\\.svg|manifest\\.json).*)'],
 };
 
 async function sha256(text) {
