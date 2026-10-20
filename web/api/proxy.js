@@ -2,10 +2,10 @@
 // Only the sources below are allowed.
 import { cached, send, query, getJson } from './_lib.js';
 
-const YF_INTERVALS = new Set(['5m', '15m', '30m', '60m', '1d']);
-const YF_RANGES = new Set(['1d', '5d', '7d', '10d', '1mo', '20d', '60d', '3mo', '6mo', '1y', '2y']);
+const YF_INTERVALS = new Set(['1m', '5m', '15m', '30m', '60m', '1d', '1wk', '1mo']);
+const YF_RANGES = new Set(['1d', '5d', '7d', '10d', '1mo', '20d', '60d', '3mo', '6mo', '1y', '2y', '5y', '10y', 'max']);
 const CG_PATH = /^(search|global|coins\/markets|coins\/[a-z0-9-]+)$/;
-const CG_KEYS = new Set(['query', 'vs_currency', 'ids', 'sparkline', 'localization', 'tickers', 'community_data', 'developer_data', 'price_change_percentage']);
+const CG_KEYS = new Set(['query', 'vs_currency', 'ids', 'sparkline', 'localization', 'tickers', 'community_data', 'developer_data', 'price_change_percentage', 'order', 'per_page', 'page']);
 const CB_GRAN = new Set(['60', '300', '900', '3600', '21600', '86400']);
 
 async function yahoo(t, i, r) {
@@ -31,7 +31,7 @@ export default async function handler(req, res) {
       case 'yahoo': {
         const t = String(q.t || '');
         if (!/^[A-Z0-9^=.\-]{1,15}$/i.test(t) || !YF_INTERVALS.has(q.i) || !YF_RANGES.has(q.r)) return send(res, 400, { error: 'bad params' });
-        const ttl = q.i === '1d' ? 600 : 60;
+        const ttl = ['1d', '1wk', '1mo'].includes(q.i) ? 600 : q.i === '1m' ? 20 : 60;
         return send(res, 200, await cached(`yf:${t}:${q.i}:${q.r}`, ttl * 1000, () => yahoo(t, q.i, q.r)), ttl);
       }
       case 'cg': {

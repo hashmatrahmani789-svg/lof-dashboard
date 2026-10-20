@@ -57,7 +57,7 @@ export function renderHero(st, r) {
   const regCls = reg[2] === 'bull' ? 'bg-up' : reg[2] === 'bear' ? 'bg-dn' : 'bg-grey';
   const ch = st.chg24;
   $('#hero').innerHTML = `
-    <div class="title"><div class="name">${esc(st.title)}</div><div class="sub">${st.sub}</div></div>
+    <div class="title"><div class="name">${st.logo || ''}${esc(st.title)}</div><div class="sub">${st.sub}</div></div>
     <div class="px"><div class="l muted">${st.tradfi ? 'Price' : 'Price · Binance perp'}</div>
       <div class="v" id="heroPx">${fp(st.price, st.prec)}</div>
       <div class="c ${tone(ch)}">${isNum(ch) ? fpct(ch) + ' 24h' : ''}</div></div>

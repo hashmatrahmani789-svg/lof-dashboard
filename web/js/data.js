@@ -3,8 +3,9 @@
 
 const FAPI = 'https://fapi.binance.com';
 const SPOT = 'https://data-api.binance.vision';
-export const BN_TF = { '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h', '4h': '4h', '12h': '12h', '1D': '1d' };
-export const TF_SEC = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '2h': 7200, '4h': 14400, '12h': 43200, '1D': 86400 };
+export const BN_TF = { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '2h': '2h', '4h': '4h', '12h': '12h', '1D': '1d', '1W': '1w', '1M': '1M' };
+export const TF_SEC = { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '2h': 7200, '4h': 14400, '12h': 43200, '1D': 86400, '1W': 604800, '1M': 2592000 };
+export const CZ_TFS = new Set(['5m', '15m', '30m', '1h', '2h', '4h', '12h', '1D']);   // timeframes Coinalyze has
 
 export const TRADFI = {
   GOLD: { t: 'GC=F', name: 'Gold futures (GC)', short: 'Gold' },
@@ -71,6 +72,11 @@ export async function spotKlines(sym, tf, limit = 300) {
   return (await getJSON(`${SPOT}/api/v3/klines?symbol=${sym}&interval=${BN_TF[tf] || tf}&limit=${limit}`)).map(toBar);
 }
 export async function ticker24(sym) { return getJSON(`${FAPI}/fapi/v1/ticker/24hr?symbol=${sym}`); }
+// all Binance futures prices + 24h change + 24h volume in one call (for the watchlist)
+export async function allTickers() {
+  const j = await getJSON(`${FAPI}/fapi/v1/ticker/24hr`, {}, 8000);
+  return Object.fromEntries(j.map(x => [x.symbol, { last: +x.lastPrice, chg: +x.priceChangePercent, vol: +x.quoteVolume }]));
+}
 export async function premiumAll() {
   const j = await getJSON(`${FAPI}/fapi/v1/premiumIndex`);
   return Object.fromEntries(j.map(x => [x.symbol, { funding: +x.lastFundingRate * 100, mark: +x.markPrice, next: x.nextFundingTime }]));
@@ -121,6 +127,11 @@ export async function czFlow(sym, tf, { snap = false, liq = false, bars = 400, p
   return getJSON(`/api/cz?sym=${sym}&tf=${tf}&bars=${bars}&snap=${snap ? 1 : 0}&liq=${liq ? 1 : 0}&parts=${parts.join(',')}&n=${n}`, {}, 65000);
 }
 export async function serverConfig() { return getJSON('/api/config'); }
+// cloud sync (watchlists, drawings) and price alerts
+export const storeGet = k => getJSON('/api/store?k=' + encodeURIComponent(k), {}, 10000);
+export const storePut = (k, value) => getJSON('/api/store?k=' + encodeURIComponent(k), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value }) }, 10000);
+export const alertsGet = () => getJSON('/api/alerts', {}, 10000);
+export const alertsDo = body => getJSON('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 10000);
 export async function sendTelegram(text) {
   return getJSON('/api/tg', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
 }
@@ -129,7 +140,7 @@ export async function saveJournal(trade) {
 }
 
 // ── Yahoo Finance (through the server) ─────────────────────
-const YF = { '5m': ['5m', '5d'], '15m': ['15m', '1mo'], '30m': ['30m', '1mo'], '1h': ['60m', '3mo'],
+const YF = { '1m': ['1m', '1d'], '1W': ['1wk', '10y'], '1M': ['1mo', 'max'], '5m': ['5m', '5d'], '15m': ['15m', '1mo'], '30m': ['30m', '1mo'], '1h': ['60m', '3mo'],
   '2h': ['60m', '3mo', 7200], '4h': ['60m', '3mo', 14400], '12h': ['60m', '6mo', 43200], '1D': ['1d', '2y'] };
 export function resample(bars, sec) {
   const out = [];

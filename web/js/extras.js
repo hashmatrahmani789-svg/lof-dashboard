@@ -1,6 +1,7 @@
 // Screener, Market Pulse, setup history, alerts, killzone clock, news.
 import * as API from './data.js';
 import { analyze, isNum, nearestLevel, nyMinutes, nyParts } from './engine.js';
+import { logo } from './logos.js';
 import { $, esc, fp, fpct, fusd, tone, pill, tile, sparkSvg, dur, toast } from './ui.js';
 
 // ── Screener ────────────────────────────────────────────────
@@ -48,7 +49,7 @@ export function renderScreener(rows, cur, onPick, status) {
         : r.setup !== 'NONE' ? pill(side + ' · waiting', 'amber') : '<span class="muted">no setup</span>';
       const zone = r.loc.zone === 'DISCOUNT' ? `<span class="up">Discount</span>` : r.loc.zone === 'PREMIUM' ? `<span class="dn">Premium</span>` : `<span class="muted">${esc(r.loc.zone)}</span>`;
       return `<tr class="click ${x.key === cur ? 'hot' : ''}" data-key="${esc(x.key)}">
-        <td><b>${esc(x.key)}</b>${x.sweep ? ` <span class="${x.sweep === 'bull' ? 'up' : 'dn'}" title="Liquidity sweep in the last bars">⚡</span>` : ''}</td>
+        <td class="symc">${logo(x.key, 16)}<b>${esc(x.key)}</b>${x.sweep ? ` <span class="${x.sweep === 'bull' ? 'up' : 'dn'}" title="Liquidity sweep in the last bars">⚡</span>` : ''}</td>
         <td class="num">${fp(r.price)}</td><td class="num ${tone(x.chg24)}">${fpct(x.chg24)}</td>
         <td>${b(r.d_bias)} ${b(r.h_bias)}</td><td>${zone}${r.loc.in_ote_long || r.loc.in_ote_short ? ' · OTE' : ''}</td>
         <td>${r.setup === 'NONE' ? '<span class="muted">—</span>' : esc(r.setup.split(' ')[0])}</td>
@@ -307,7 +308,9 @@ export async function loadNews() {
   updateNews();
   if (typeof window.__onNews === 'function') window.__onNews();
 }
-export function updateNews() {
+let newsTz = 'local';
+export function updateNews(tz) {
+  if (tz) newsTz = tz;
   const el = $('#news');
   if (!newsCache) { el.innerHTML = '<span class="muted">News: unavailable</span>'; return; }
   const now = Date.now() / 1000;
@@ -317,6 +320,6 @@ export function updateNews() {
   if (recent) el.innerHTML = `<span class="dn">●</span> <b>${esc(recent.title)}</b> just released`;
   else if (next) el.innerHTML = `📅 <b>${esc(next.title)}</b> in ${dur(next.t - now)}`;
   else el.innerHTML = '<span class="muted">No more high-impact USD news this week</span>';
-  el.title = 'High-impact USD news this week (Forex Factory, your local time):\n' + newsCache.map(e =>
-    `${new Date(e.t * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })} · ${e.title}${e.forecast ? ' · f ' + e.forecast : ''}${e.previous ? ' · p ' + e.previous : ''}`).join('\n');
+  el.title = `High-impact USD news this week (Forex Factory, ${newsTz === 'local' ? 'your local time' : newsTz}). Full list: Calendar tab.\n` + newsCache.map(e =>
+    `${new Date(e.t * 1000).toLocaleString('en-GB', { timeZone: newsTz === 'local' ? undefined : newsTz, weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} · ${e.title}${e.forecast ? ' · f ' + e.forecast : ''}${e.previous ? ' · p ' + e.previous : ''}`).join('\n');
 }

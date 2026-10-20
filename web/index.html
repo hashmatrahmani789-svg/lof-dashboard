@@ -26,7 +26,9 @@
   <div class="hdr-right">
     <div id="kz" class="kz" title="Killzones (New York time): London 02:00–05:00 · New York 07:00–10:00 · Asia 20:00–00:00"></div>
     <div id="news" class="kz news" title="Next high-impact USD news (Forex Factory)"></div>
+    <div class="clockw"><button id="clock" class="kz clock" title="Time zone"></button><div id="clockPop" class="pop clock-pop" hidden></div></div>
     <div id="status" class="status"><span class="dot"></span><span class="txt">Starting</span><div class="tip"></div></div>
+    <button id="btnAlerts" class="icon-btn bell" title="Alerts (Alt+A on the chart adds one)">🔔</button>
     <button id="btnTheme" class="icon-btn" title="Light / dark">☀</button>
     <button id="btnSettings" class="icon-btn" title="Settings">⚙</button>
   </div>
@@ -44,10 +46,13 @@
         <div id="tfs" class="seg"></div>
         <div class="menu" id="mPanes"><button class="btn">Panes ▾</button><div class="pop"></div></div>
         <div class="menu" id="mLayers"><button class="btn">Layers ▾</button><div class="pop"></div></div>
+        <div class="menu" id="mInd"><button class="btn">Indicators ▾</button><div class="pop"></div></div>
         <span class="sp"></span>
+        <div id="layouts" class="seg" title="Chart layout: 1, 2 or 4 charts"></div>
         <div id="sizes" class="seg" title="Chart size"></div>
       </div>
-      <div id="chart" class="chart-host"><div class="loading">Loading chart…</div></div>
+      <div id="chartGrid" class="chart-grid l1"><div id="chart" class="chart-host cell main"><div class="loading">Loading chart…</div></div></div>
+      <datalist id="miniSyms"></datalist>
       <div id="chartFoot" class="chart-foot"></div>
     </div>
 
@@ -61,17 +66,30 @@
       <div class="tabs" id="tabs">
         <button data-tab="screener" class="on">Screener</button>
         <button data-tab="pulse">Market Pulse</button>
+        <button data-tab="calendar">Calendar</button>
         <button data-tab="history">Setup history</button>
         <button data-tab="markets">Data sources</button>
       </div>
       <div id="tab-screener"></div>
       <div id="tab-pulse" hidden></div>
+      <div id="tab-calendar" hidden></div>
       <div id="tab-history" hidden></div>
       <div id="tab-markets" hidden></div>
     </div>
   </section>
 
   <aside class="right">
+    <div id="wlPanel" class="card wl">
+      <div class="wl-head">
+        <button id="wlName" class="wl-name" title="Switch, create, rename or delete lists">Watchlist ▾</button>
+        <span class="sp"></span>
+        <button id="wlAdd" class="icon-btn" title="Add symbol">＋</button>
+      </div>
+      <div id="wlMenu" class="pop wl-menu" hidden></div>
+      <div id="wlSearch" class="wl-search" hidden><input placeholder="Add symbol, e.g. SOL or GOLD" spellcheck="false" autocomplete="off"><div class="res"></div></div>
+      <div class="wl-cols"><span data-s="sym">Symbol</span><span data-s="last">Last</span><span data-s="chg">Chg%</span><span data-s="vol">Vol</span><span></span></div>
+      <div id="wlRows" class="wl-rows"></div>
+    </div>
     <div id="plan" class="card"></div>
     <div id="checklist" class="card"></div>
     <div id="bias" class="card"></div>
@@ -80,6 +98,8 @@
 </main>
 
 <div id="drawer" class="drawer"></div>
+<div id="alertsPanel" class="alerts-panel" hidden></div>
+<div id="modal" class="modal" hidden></div>
 <div id="toast" class="toast"></div>
 
 <script src="/js/lwc.js"></script>

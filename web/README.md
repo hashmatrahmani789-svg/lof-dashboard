@@ -44,6 +44,16 @@ Notion fields are matched by column name: Coin/Asset, Side/Direction, Setup, Ent
 
 You then get one message each time a watchlist market turns LONG or SHORT READY on a closed candle.
 
+## Cloud storage (watchlists, drawings and price alerts on every device)
+1. Vercel → your project → **Storage** → **Create Database** → **Upstash for Redis** (free) → connect it to this project.
+2. Redeploy (`npx vercel --prod`).
+After that: watchlists and drawings sync between phone and PC, the watchlist menu can pick which list the Telegram scanner watches,
+and price alerts are also checked every 5 minutes by the scanner when the dashboard is closed.
+
+## Price alerts
+- Alt+A on the chart, right-click → Add alert, or select a horizontal / trend line and press 🔔.
+- 🔔 in the top bar lists, edits and deletes alerts.
+
 ## Notes
 
 - **Matching coinalyze.net:** order flow is summed across the markets listed under **Data sources** (top exchanges, USD). On coinalyze.net, use the aggregated chart with the same exchanges to see the same numbers. CVD starts at 0 on the first candle you can see, the same way Coinalyze draws it.

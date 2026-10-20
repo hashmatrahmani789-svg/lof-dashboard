@@ -40,7 +40,7 @@ const FIB = [0, 0.236, 0.382, 0.5, 0.62, 0.705, 0.79, 1];
 const UP = '#26a69a', DN = '#ef5350';
 
 export function attachDrawing(o) {
-  const { chart, cs, el, root, C, X, Y, timeToLogical, logicalToTime, fmt, coin, primitive, LC, paneW, STEP } = o;
+  const { chart, cs, el, root, C, X, Y, timeToLogical, logicalToTime, fmt, coin, primitive, LC, paneW, STEP, onAlert, onSave } = o;
   const ts = chart.timeScale();
   const KEY = 'lof_draw_' + coin;
 
@@ -55,11 +55,15 @@ export function attachDrawing(o) {
       return { id: Math.random().toString(36).slice(2), type: s.type, pts, color: '#2962ff' };
     });
   } catch (e) { shapes = []; }
+  if (Array.isArray(o.initial)) shapes = o.initial;          // newer copy from the cloud (synced between devices)
   let tool = 'cursor', pending = [], hover = null, magnet = true, hidden = false, locked = false;
   let selected = null, drag = null, measure = null, color = '#2962ff';
   const undoStack = [], redoStack = [];
   const snap = () => JSON.stringify(shapes);
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(shapes)); } catch (e) { /* ignore */ } };
+  const save = () => {
+    try { localStorage.setItem(KEY, JSON.stringify(shapes)); localStorage.setItem(KEY + '_at', String(Date.now())); } catch (e) { /* ignore */ }
+    if (onSave) onSave(shapes);
+  };
   const commit = before => { undoStack.push(before); if (undoStack.length > 100) undoStack.shift(); redoStack.length = 0; save(); syncLines(); };
 
   // horizontal lines / rays get a price label on the axis
@@ -161,9 +165,45 @@ export function attachDrawing(o) {
         break;
       }
       case 'text': {
-        ctx.font = '600 13px Inter, sans-serif'; ctx.fillStyle = c; ctx.fillText(s.text || 'Text', a.x, a.y);
+        ctx.font = `600 ${s.lsize || 13}px Inter, sans-serif`; ctx.fillStyle = s.lcolor || c;
+        String(s.text || 'Text').split('\n').forEach((ln, k) => ctx.fillText(ln, a.x, a.y + k * ((s.lsize || 13) + 3)));
         break;
       }
+    }
+    if (s.label && s.type !== 'text') shapeLabel(ctx, s, pts, W, H);
+  }
+  // text written on a line, box, channel, fib or position (like TradingView's "Text" tab)
+  function shapeLabel(ctx, s, pts, W, H) {
+    const [a, b] = pts, size = s.lsize || 12, col = s.lcolor || s.color || '#2962ff', pos = s.lpos || 'top';
+    ctx.font = `600 ${size}px Inter, sans-serif`; ctx.fillStyle = col;
+    const lines = String(s.label).split('\n'), lh = size + 3;
+    const block = (x, y, align, base) => {       // base: 'above' | 'below' | 'middle'
+      ctx.textAlign = align;
+      const y0 = base === 'above' ? y - 6 - (lines.length - 1) * lh : base === 'below' ? y + size + 4 : y + size / 2 - 2 - (lines.length - 1) * lh / 2;
+      lines.forEach((ln, k) => ctx.fillText(ln, x, y0 + k * lh));
+      ctx.textAlign = 'left';
+    };
+    const vpos = pos === 'bottom' ? 'below' : pos === 'middle' ? 'middle' : 'above';
+    switch (s.type) {
+      case 'trend': case 'ray': case 'channel': {
+        if (!b) return;
+        const e = s.type === 'ray' ? rayEnd(a, b, W) : b, mx = (a.x + e.x) / 2, my = (a.y + e.y) / 2;
+        const ang = Math.atan2(e.y - a.y, e.x - a.x), flip = Math.abs(ang) > Math.PI / 2;
+        ctx.save(); ctx.translate(mx, my); ctx.rotate(flip ? ang + Math.PI : ang); block(0, 0, 'center', vpos); ctx.restore();
+        return;
+      }
+      case 'h': return block(W - 90, a.y, 'right', vpos);
+      case 'hray': return block(a.x + 70, a.y, 'left', vpos);
+      case 'v': { ctx.save(); ctx.translate(a.x, 30); ctx.rotate(Math.PI / 2); block(0, 0, 'left', 'above'); ctx.restore(); return; }
+      case 'rect': case 'measure': {
+        if (!b) return;
+        const x = (a.x + b.x) / 2, top = Math.min(a.y, b.y), bot = Math.max(a.y, b.y);
+        if (pos === 'top') return block(x, top + 4 + size * 0 , 'center', 'below');
+        if (pos === 'bottom') return block(x, bot - 4, 'center', 'above');
+        return block(x, (top + bot) / 2, 'center', 'middle');
+      }
+      case 'fib': if (b) block(Math.min(a.x, b.x), Math.min(a.y, b.y) - 14, 'left', 'above'); return;
+      case 'long': case 'short': block(a.x, Math.min(...pts.map(q => q.y)) - 4, 'left', 'above'); return;
     }
   }
   function handles(ctx, s) {
@@ -204,7 +244,7 @@ export function attachDrawing(o) {
           if (distSeg(x, y, a, b) < near || distSeg(x, y, { x: a.x, y: a.y + off }, { x: b.x, y: b.y + off }) < near) return s;
           break;
         }
-        case 'text': { if (x >= a.x - 4 && x <= a.x + 8 * (s.text || 'Text').length + 8 && y >= a.y - 16 && y <= a.y + 4) return s; break; }
+        case 'text': { const z = s.lsize || 13, ls = String(s.text || 'Text').split('\n'); if (x >= a.x - 4 && x <= a.x + z * 0.62 * Math.max(...ls.map(l => l.length)) + 8 && y >= a.y - z - 3 && y <= a.y + (ls.length - 1) * (z + 3) + 4) return s; break; }
         case 'fib': { const x1 = Math.min(a.x, b.x); if (x >= x1 && y >= Math.min(a.y, b.y) - 4 && y <= Math.max(a.y, b.y) + 4) return s; break; }
         case 'long': case 'short': {
           let x2 = X(posEnd(s)); if (x2 - a.x < 60) x2 = a.x + 140;
@@ -251,19 +291,56 @@ export function attachDrawing(o) {
     if (!selected) { selBar.style.display = 'none'; return; }
     selBar.style.display = 'flex';
     selBar.innerHTML = COLORS.map(c => `<button class="sw ${selected.color === c ? 'on' : ''}" data-c="${c}" style="background:${c}" title="Colour"></button>`).join('') +
-      (selected.type === 'text' ? '<button class="tb" data-a="edit" title="Edit text">Edit</button>' : '') +
-      `<button class="tb" data-a="clone" title="Clone">Clone</button><button class="tb" data-a="del" title="Delete (Del)">${svg('trash')}</button>`;
+      (selected.type !== 'measure' ? `<button class="tb ${editing ? 'on' : ''}" data-a="edit" title="Write text on this drawing (double-click it)">T Text</button>` : '') +
+      (['h', 'hray', 'trend', 'ray'].includes(selected.type) ? '<button class="tb" data-a="alert" title="Alert when price crosses this line">🔔 Alert</button>' : '') +
+      `<button class="tb" data-a="clone" title="Clone">Clone</button><button class="tb" data-a="del" title="Delete (Del)">${svg('trash')}</button>` +
+      (editing ? textEditor(selected) : '');
+    bindEditor();
     selBar.querySelectorAll('[data-c]').forEach(b => b.onclick = () => { const before = snap(); selected.color = b.dataset.c; color = b.dataset.c; commit(before); renderSelBar(); redraw(); });
     selBar.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
       const a = b.dataset.a, before = snap();
+      if (a === 'alert') {
+        const s0 = selected;
+        if (s0.type === 'h' || s0.type === 'hray') onAlert && onAlert({ kind: 'price', price: s0.pts[0].p });
+        else onAlert && onAlert({ kind: 'line', line: { t1: s0.pts[0].t, p1: s0.pts[0].p, t2: s0.pts[1].t, p2: s0.pts[1].p } });
+        return;
+      }
       if (a === 'del') { shapes = shapes.filter(s => s !== selected); selected = null; }
-      if (a === 'edit') { const t = prompt('Text', selected.text || ''); if (t != null) selected.text = t; }
+      if (a === 'edit') { editing = !editing; renderSelBar(); if (editing) focusEditor(); return; }
       if (a === 'clone') {
         const step = STEP * 5, c2 = JSON.parse(JSON.stringify(selected));
         c2.id = Math.random().toString(36).slice(2); c2.pts.forEach(q => { q.t += step; }); shapes.push(c2); selected = c2;
       }
       commit(before); renderSelBar(); redraw();
     });
+  }
+  // inline text editor in the selection bar: text, size, colour, position
+  let editing = false;
+  const SIZES = [10, 12, 14, 18, 24];
+  function textEditor(s0) {
+    const isText = s0.type === 'text', val = isText ? (s0.text || '') : (s0.label || '');
+    const posOpts = ['rect', 'measure'].includes(s0.type) ? [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']] : [['top', 'Above'], ['middle', 'On line'], ['bottom', 'Below']];
+    return `<div class="lc-ted"><textarea rows="2" placeholder="Write text… (Enter = new line)">${val.replace(/</g, '&lt;')}</textarea>
+      <div class="row"><select data-e="size" title="Size">${SIZES.map(z => `<option value="${z}" ${(s0.lsize || (isText ? 13 : 12)) === z ? 'selected' : ''}>${z}px</option>`).join('')}</select>
+      ${isText ? '' : `<select data-e="pos" title="Position">${posOpts.map(([k, n]) => `<option value="${k}" ${(s0.lpos || 'top') === k ? 'selected' : ''}>${n}</option>`).join('')}</select>`}
+      <input type="color" data-e="color" value="${/^#[0-9a-f]{6}$/i.test(s0.lcolor || s0.color) ? (s0.lcolor || s0.color) : '#2962ff'}" title="Text colour">
+      <button class="tb" data-e="ok">Done</button></div></div>`;
+  }
+  function focusEditor() { const t = selBar.querySelector('.lc-ted textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }
+  function bindEditor() {
+    const box = selBar.querySelector('.lc-ted'); if (!box || !selected) return;
+    const s0 = selected, before = snap(), ta = box.querySelector('textarea');
+    const apply = () => { if (s0.type === 'text') s0.text = ta.value || 'Text'; else s0.label = ta.value; redraw(); };
+    ta.oninput = apply;
+    ['keydown', 'keyup', 'keypress'].forEach(ev => ta.addEventListener(ev, e => { e.stopPropagation(); if (ev === 'keydown' && e.key === 'Escape') done(); }));
+    box.querySelectorAll('select, input').forEach(i => i.onchange = () => {
+      if (i.dataset.e === 'size') s0.lsize = +i.value;
+      if (i.dataset.e === 'pos') s0.lpos = i.value;
+      if (i.dataset.e === 'color') s0.lcolor = i.value;
+      redraw();
+    });
+    box.querySelector('[data-e=ok]').onclick = () => done();
+    function done() { apply(); editing = false; commit(before); renderSelBar(); redraw(); }
   }
   function setTool(t) {
     tool = t; pending = []; hover = null;
@@ -289,9 +366,10 @@ export function attachDrawing(o) {
     const before = snap();
     const s = { id: Math.random().toString(36).slice(2), type: tool, pts: pending.slice(0, NEED[tool]), color };
     if (tool === 'measure') { measure = s; setTool('cursor'); redraw(); return; }
-    if (tool === 'text') { const t = prompt('Text', ''); if (!t) { setTool('cursor'); return; } s.text = t; }
+    if (tool === 'text') s.text = 'Text';
     shapes.push(s); selected = s; commit(before);
-    setTool('cursor'); renderSelBar(); redraw();
+    const wasText = tool === 'text';
+    setTool('cursor'); editing = wasText; renderSelBar(); if (wasText) focusEditor(); redraw();
   }
   // clicks are read straight from the mouse (more reliable than the chart's click event for fast clicks)
   let press = null;
@@ -313,8 +391,9 @@ export function attachDrawing(o) {
     if (tool !== 'cursor') { press = { x, y }; return; }   // placing a point: decided on mouse up
     if (measure) { measure = null; redraw(); }
     let s = selected && hitHandle(selected, x, y) >= 0 ? selected : hitShape(x, y);
-    if (!s) { if (selected) { selected = null; renderSelBar(); redraw(); } return; }
+    if (!s) { if (selected) { if (editing) { editing = false; commit(snap()); } selected = null; renderSelBar(); redraw(); } return; }
     const hIdx = hitHandle(s, x, y);
+    if (selected !== s) editing = false;
     selected = s; renderSelBar(); redraw();
     if (locked) return;
     e.stopImmediatePropagation(); e.preventDefault();
@@ -352,6 +431,13 @@ export function attachDrawing(o) {
     drag = null; redraw();
   };
   el.addEventListener('pointerdown', onDown, true);
+  const onDbl = e => {
+    if (tool !== 'cursor') return;
+    const { x, y } = local(e); const s0 = hitShape(x, y); if (!s0 || s0.type === 'measure') return;
+    e.stopPropagation(); e.preventDefault();
+    selected = s0; editing = true; renderSelBar(); focusEditor(); redraw();
+  };
+  el.addEventListener('dblclick', onDbl, true);
   window.addEventListener('pointermove', onMove, true);
   window.addEventListener('pointerup', onUp, true);
 
@@ -378,6 +464,7 @@ export function attachDrawing(o) {
   setTool('cursor');
   return {
     busy: () => tool !== 'cursor' || !!drag, onKey, onCrosshair, redraw,
-    destroy() { el.removeEventListener('pointerdown', onDown, true); window.removeEventListener('pointermove', onMove, true); window.removeEventListener('pointerup', onUp, true); },
+    addHorizontal(p) { const before = snap(); shapes.push({ id: Math.random().toString(36).slice(2), type: 'h', pts: [{ t: C.length ? C[C.length - 1].time : 0, p }], color }); commit(before); redraw(); },
+    destroy() { el.removeEventListener('dblclick', onDbl, true); el.removeEventListener('pointerdown', onDown, true); window.removeEventListener('pointermove', onMove, true); window.removeEventListener('pointerup', onUp, true); },
   };
 }
