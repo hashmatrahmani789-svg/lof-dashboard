@@ -43,7 +43,7 @@ export function createMini(cell, init, ctx) {
       coin: st.coin, tf: st.tf, tfSec: API.TF_SEC[st.tf], prec: meta.prec, theme: o.theme, source: meta.src,
       tzOffset: tzOffset(o.tz), chartType: o.chartType, scaleMode: 'normal', colors: o.colors, ind: o.ind,
       candles: bars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })), vol: bars.map(b => b.v || 0),
-      impulseMult: o.impulseMult, layers: o.layers, panes,
+      impDet: o.impDet, impHollow: o.impHollow, layers: o.layers, panes,
       alerts: ctx.alertsFor(st.coin),
       onDrawingsSaved: shapes => ctx.onDrawingsSaved(st.coin, shapes),
       onNeedHistory: older,

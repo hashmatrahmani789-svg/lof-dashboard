@@ -25,7 +25,7 @@ const IND_ROWS = [['st', 'Supertrend'], ['tema15', 'TEMA 15'], ['tema30', 'TEMA 
 const PANES = [['oi', 'OI'], ['perp', 'Perp CVD'], ['spot', 'Spot CVD'], ['cvd2', 'Perp vs spot CVD'], ['vol', 'Volume'],
   ['liq', 'Liquidations'], ['cbp', 'Coinbase premium'], ['fng', 'Fear & Greed']];
 const SIZES = { S: 380, M: 520, L: 700, XL: 900 };
-const IMPULSE = { Strict: 2.5, Normal: 2.0, Loose: 1.5 };
+const IMP_DEFAULT = [{ len: 10, size: 1.5, vol: 1.5, ratio: 0.7, on: true }, { len: 14, size: 2, vol: 2, ratio: 0.6, on: true }, { len: 20, size: 2.5, vol: 3, ratio: 0.5, on: true }];
 const TFS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '12h', '1D', '1W', '1M'];
 const HOT = TFS.slice(1, 10);                     // keys 1–9: 5m … 1W
 const TF_LABEL = { '1D': 'D', '1W': 'W', '1M': 'M' };
@@ -44,13 +44,16 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.6';
+const VERSION = 'v8.11';
 let cfg;
 try { cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { cfg = Object.assign({}, DEFAULTS); }
 cfg.params = Object.assign({}, DEFAULTS.params, cfg.params);
 cfg.alerts = Object.assign({}, DEFAULTS.alerts, cfg.alerts);
 cfg.cal = Object.assign({}, DEFAULTS.cal, cfg.cal);
 cfg.ind = Object.assign({}, DEFAULTS.ind, cfg.ind);
+if (!Array.isArray(cfg.impDet) || cfg.impDet.length !== 3) cfg.impDet = JSON.parse(JSON.stringify(IMP_DEFAULT));
+if (cfg.impHollow == null) cfg.impHollow = true;
+if (!cfg.seenImp3) { ['imp1', 'imp2', 'imp3'].forEach(k => delete cfg.colors[k]); cfg.seenImp3 = true; }
 cfg.hist = Object.assign({}, DEFAULTS.hist, cfg.hist);
 cfg.colors = Object.assign({}, cfg.colors);
 // v8.5: previous day / week profiles replaced by the levels (now with VAH / VAL) and the previous 4H profile
@@ -293,7 +296,7 @@ function layersObj() {
     asia: Z.includes('Asia range'), sessions: Z.includes('Sessions'), vp4h: Z.includes('VP prev 4H'),
     vp_visible: Z.includes('VP visible range'), news: Z.includes('News (CPI, FOMC…)'), fvg: Z.includes('Fair value gaps'), sesshl: Z.includes('Session highs / lows') };
 }
-const chartOpts = () => ({ theme: cfg.theme, tz: cfg.tz, chartType: cfg.chartType, colors: cfg.colors, ind: cfg.ind, impulseMult: IMPULSE[cfg.impulse] || 2,
+const chartOpts = () => ({ theme: cfg.theme, tz: cfg.tz, chartType: cfg.chartType, colors: cfg.colors, ind: cfg.ind, impDet: cfg.impDet, impHollow: cfg.impHollow,
   layers: layersObj(), lines: cfg.lines, panes: cfg.panes });
 // alert actions from any chart: add (Alt+A, right-click, 🔔 on a line), move (drag), edit, delete
 const alertHooks = (key, sym, tradfi, prec) => ({
@@ -348,14 +351,14 @@ function buildChartNow() {
     onDrawingsSaved: shapes => pushDrawings(S.asset, shapes), source: S.tradfi ? 'Yahoo · ' + S.ticker : 'Binance · ' + S.sym,
     candles: S.chartBars.map(b => ({ time: b.t, open: b.o, high: b.h, low: b.l, close: b.c })),
     vol: S.chartBars.map(b => b.v || 0),
-    impulseMult: o.impulseMult, layers: o.layers,
+    impDet: o.impDet, impHollow: o.impHollow, layers: o.layers,
     panes,
     onNeedHistory: () => loadOlder(),
   }, alertHooks(S.asset, S.sym, S.tradfi, S.prec), overlays(S.r)));
   fillPanes();
   $('#chartFoot').innerHTML = S.tradfi
     ? `Yahoo Finance · ${esc(S.ticker)} · updates every 30 s · scroll / + − to zoom · drag (also up/down) · wheel on price axis to stretch · double-click axis to reset · keys 1–9 timeframe, F full screen · Alt+A alert`
-    : `Binance ${esc(S.sym)} perpetual · live · OI / CVD / liquidations: Coinalyze (OI from ${cfg.oiMarkets} perp markets, CVD from the top 6 perp + 3 spot) · CVD starts at 0 on the first visible candle · scroll left for more history · keys 1–9 timeframe, F full screen, / search, Alt+A alert, right-click for more · ${VERSION}`;
+    : `Binance ${esc(S.sym)} perpetual · live · OI / CVD / liquidations: Coinalyze (OI from ${cfg.oiMarkets} perp markets, CVD from the top 6 perp + 3 spot) · CVD counts from the first loaded candle (zoom doesn't change it) · scroll left for more history · keys 1–9 timeframe, F full screen, / search, Alt+A alert, right-click for more · ${VERSION}`;
 }
 
 async function loadChart(g) {
@@ -673,8 +676,14 @@ function renderBar() {
   $('#mLayers .pop').innerHTML = `<h4>Chart type</h4><div class="seg wrap" id="ctypes">${CHART_TYPES.map(([k, n]) => `<button data-ct="${k}" class="${k === cfg.chartType ? 'on' : ''}">${n}</button>`).join('')}</div>
     <h4>Lines</h4><div class="opts">${opt(LINE_LAYERS.map(x => [x, x]), cfg.lines, 'l')}</div>
     <h4>Zones &amp; profiles</h4><div class="opts">${opt(ZONE_LAYERS.map(x => [x, x]), cfg.zones, 'z')}</div>
-    <h4>Impulse sensitivity</h4><div class="seg">${Object.keys(IMPULSE).map(k => `<button data-i="${k}" class="${k === cfg.impulse ? 'on' : ''}">${k}</button>`).join('')}</div>
-    <div class="muted" style="font-size:11px;margin-top:4px">Impulse = body ≥ ${IMPULSE[cfg.impulse]}× the average · double ≥ ${IMPULSE[cfg.impulse] + 1}× · triple ≥ ${IMPULSE[cfg.impulse] + 2}× (each its own colour, Settings → Colours)</div>
+    <h4>Impulse candles (3 detectors)</h4>
+    <table class="imptbl"><tr><th></th><th>Length</th><th>Size ×</th><th>Volume ×</th><th>Body / wick</th><th>Colour</th></tr>
+      ${cfg.impDet.map((d, i) => `<tr><td><label><input type="checkbox" data-dn="${i}" ${d.on !== false ? 'checked' : ''}> ${i + 1}</label></td>
+        <td><input type="number" data-d="${i}:len" min="2" max="200" value="${d.len}"></td><td><input type="number" data-d="${i}:size" min="0.5" max="10" step="0.1" value="${d.size}"></td>
+        <td><input type="number" data-d="${i}:vol" min="0" max="10" step="0.1" value="${d.vol}"></td><td><input type="number" data-d="${i}:ratio" min="0" max="1" step="0.05" value="${d.ratio}"></td>
+        <td><input type="color" data-dc="${i + 1}" value="${cfg.colors['imp' + (i + 1)] || DEFAULT_COLORS['imp' + (i + 1)]}"></td></tr>`).join('')}</table>
+    <label class="tickrow"><input type="checkbox" id="impHollow" ${cfg.impHollow ? 'checked' : ''}> Bearish impulse candles hollow (outline only)</label>
+    <div class="muted" style="font-size:11px;margin-top:4px">A candle is marked when its body ≥ size × the average body, its volume ≥ volume × the average volume, and body ÷ full range ≥ the ratio (averages over "length" candles). Detector 3 wins over 2 and 1. <a href="#" id="impReset">Reset</a></div>
     <h4>How many to show (past opens, highs / lows)</h4><div class="hist">${HIST_ROWS.map(([k, n]) => `<label>${n}<select data-h="${k}">${[1, 2, 3, 4, 5, 6, 8, 10].map(v => `<option ${+cfg.hist[k] === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`).join('')}</div>`;
   const I = cfg.ind, num = (k, lo, hi, step = 1) => `<input type="number" data-n="${k}" min="${lo}" max="${hi}" step="${step}" value="${I[k]}">`;
   $('#mInd .pop').innerHTML = `<h4>Indicators</h4><div class="opts">${opt(IND_ROWS, IND_ROWS.filter(([k]) => I[k]).map(([k]) => k), 'ind')}</div>
@@ -701,7 +710,11 @@ function renderBar() {
   });
   M('[data-l]').forEach(b => b.onclick = () => { cfg.lines = toggle(cfg.lines, b.dataset.l); saveCfg(); renderBar(); rebuildAll(); });
   M('[data-z]').forEach(b => b.onclick = () => { cfg.zones = toggle(cfg.zones, b.dataset.z); saveCfg(); renderBar(); rebuildAll(); });
-  M('[data-i]').forEach(b => b.onclick = () => { cfg.impulse = b.dataset.i; saveCfg(); renderBar(); rebuildAll(); });
+  M('[data-d]').forEach(x => x.onchange = () => { const [i, k] = x.dataset.d.split(':'), v = +x.value; if (isNum(v)) { cfg.impDet[+i][k] = v; saveCfg(); rebuildAll(); } });
+  M('[data-dn]').forEach(x => x.onchange = () => { cfg.impDet[+x.dataset.dn].on = x.checked; saveCfg(); rebuildAll(); });
+  M('[data-dc]').forEach(x => x.onchange = () => { cfg.colors['imp' + x.dataset.dc] = x.value; saveCfg(); rebuildAll(); });
+  const ih = $('#impHollow'); if (ih) ih.onchange = () => { cfg.impHollow = ih.checked; saveCfg(); rebuildAll(); };
+  const ir = $('#impReset'); if (ir) ir.onclick = e => { e.preventDefault(); cfg.impDet = JSON.parse(JSON.stringify(IMP_DEFAULT)); ['imp1', 'imp2', 'imp3'].forEach(k => delete cfg.colors[k]); saveCfg(); renderBar(); rebuildAll(); };
 }
 ['#mPanes', '#mLayers', '#mInd'].forEach(id => {
   $(id + ' > .btn').onclick = e => { e.stopPropagation(); const open = $(id).classList.contains('open'); document.querySelectorAll('.menu').forEach(m => m.classList.remove('open')); if (!open) $(id).classList.add('open'); };

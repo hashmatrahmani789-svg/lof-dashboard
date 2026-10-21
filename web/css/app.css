@@ -305,6 +305,17 @@ b.logo.ltxt { display: inline-grid; place-items: center; color: #fff; font-weigh
 td.symc { display: table-cell; }
 td.symc .logo { margin-right: 6px; }
 
+.imptbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.imptbl th { color: var(--muted); font-weight: 500; text-align: left; padding: 2px; }
+.imptbl td { padding: 2px; }
+.imptbl input[type=number] { width: 52px; background: var(--panel2); border: 1px solid var(--line2); border-radius: 5px; color: var(--text); font: inherit; padding: 2px 4px; }
+.imptbl input[type=color] { width: 26px; height: 22px; padding: 0; border: 1px solid var(--line2); border-radius: 5px; background: none; }
+.tickrow { display: flex; gap: 6px; align-items: center; font-size: 12px; margin-top: 6px; }
+/* right column scrolls on its own (like TradingView's right panel); lists never drag the page with them */
+@media (min-width: 1101px) {
+  .grid > .right { position: sticky; top: 58px; align-self: start; max-height: calc(100vh - 68px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding-right: 2px; }
+}
+.wl-rows, .wl-search .res, .wl-menu, .cal-list, .al-list, .alerts-panel, .clock-pop, .dropdown, .menu .pop, .drawer, .tbl-wrap { overscroll-behavior: contain; }
 /* clock + alerts button */
 .clockw { position: relative; }
 .kz.clock { cursor: pointer; color: var(--text); font: inherit; font-size: 12px; }

@@ -17,6 +17,7 @@ const ICON = {
   short: '<path d="M4 4h14v8H4z"/><path d="M4 12h14v6H4z" fill="currentColor" fill-opacity=".25"/>',
   measure: '<path d="M3 17L17 3M3 17h5M3 17v-5M17 3h-5M17 3v5"/>',
   text: '<path d="M5 5h12M11 5v13"/>',
+  brush: '<path d="M4 18c2-1 2.5-3 4-3s1.5 2 3 2 2.5-4 4-6"/><path d="M14 5l3 3-7 7-3 1 1-3z"/>',
   magnet: '<path d="M6 4v7a5 5 0 0010 0V4h-3v7a2 2 0 01-4 0V4z"/>',
   eye: '<path d="M2 11s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/><circle cx="11" cy="11" r="2.5"/>',
   lock: '<rect x="5" y="10" width="12" height="9" rx="1.5"/><path d="M8 10V7a3 3 0 016 0v3"/>',
@@ -29,14 +30,14 @@ const TOOLS = [
   ['cursor', 'Cursor (Esc)', 0], ['trend', 'Trend line (Alt+T)', 2], ['ray', 'Ray (Alt+Shift+T)', 2], ['h', 'Horizontal line (Alt+H)', 1],
   ['hray', 'Horizontal ray (Alt+J)', 1], ['v', 'Vertical line (Alt+V)', 1], ['channel', 'Parallel channel (Alt+P)', 3],
   ['rect', 'Rectangle (Alt+Shift+R)', 2], ['fib', 'Fib retracement (Alt+F)', 2], ['long', 'Long position (Alt+L)', 3],
-  ['short', 'Short position (Alt+S)', 3], ['measure', 'Measure (Shift + click)', 2], ['text', 'Text (Alt+N)', 1],
+  ['short', 'Short position (Alt+S)', 3], ['measure', 'Measure (Shift + click)', 2], ['text', 'Text (Alt+N)', 1], ['brush', 'Brush / pencil: hold and draw (Alt+B)', 0],
 ];
 const NEED = Object.fromEntries(TOOLS.map(t => [t[0], t[2]]));
 const HINT = { trend: 'Click 2 points', ray: 'Click 2 points', h: 'Click a price', hray: 'Click the start', v: 'Click a time', channel: 'Click 2 points for the line, then a 3rd for the width',
   rect: 'Click 2 corners', fib: 'Click the swing start, then the swing end', long: 'Click entry, then stop, then target', short: 'Click entry, then stop, then target',
-  measure: 'Click the end point', text: 'Click where the text goes' };
+  measure: 'Click the end point', text: 'Click where the text goes', brush: 'Hold the mouse button and draw' };
 const COLORS = ['#2962ff', '#f23645', '#089981', '#ff9800', '#9c27b0', '#787b86', '#ffffff', '#000000'];
-const FIB = [0, 0.236, 0.382, 0.5, 0.62, 0.705, 0.79, 1];
+const FIB = [-0.2, 0, 0.25, 0.5, 0.75, 1, 1.2];          // same levels as your TradingView fib
 const UP = '#26a69a', DN = '#ef5350';
 
 export function attachDrawing(o) {
@@ -126,15 +127,15 @@ export function attachDrawing(o) {
       }
       case 'fib': {
         if (!b) break;
+        // like TradingView: solid lines from the start of the fib to the right edge, "level (price)" at the right end
         const p1 = s.pts[0].p, p2 = s.pts[1].p, pr = l => p2 + (p1 - p2) * l, x1 = Math.min(a.x, b.x);
-        const ya = Y(pr(0.62)), yb = Y(pr(0.79));
-        if (ya != null && yb != null) { ctx.fillStyle = 'rgba(249,168,37,0.13)'; ctx.fillRect(x1, Math.min(ya, yb), W - x1, Math.abs(yb - ya)); }
         FIB.forEach(l => {
           const y = Y(pr(l)); if (y == null) return;
-          const col = l >= 0.62 && l <= 0.79 ? '#f9a825' : l === 0.5 ? '#9598a1' : c;
-          seg(ctx, { x: x1, y }, { x: W, y }, col, 1); label(ctx, `${l} (${fmt(pr(l))})`, x1, y - 2, col);
+          seg(ctx, { x: x1, y }, { x: W - 4, y }, c, 2);
+          ctx.font = '12px Inter, sans-serif'; ctx.fillStyle = c; ctx.textAlign = 'right';
+          ctx.fillText(`${l} (${fmt(pr(l))})`, W - 8, y - 4); ctx.textAlign = 'left';
         });
-        seg(ctx, a, b, '#9598a1', 1, [4, 4]);
+        seg(ctx, a, b, c, 1, [4, 4]);
         break;
       }
       case 'long': case 'short': {
@@ -162,6 +163,12 @@ export function attachDrawing(o) {
         const dur = secs >= 86400 ? `${Math.floor(secs / 86400)}d ${Math.round((secs % 86400) / 3600)}h` : `${Math.floor(secs / 3600)}h ${Math.round((secs % 3600) / 60)}m`;
         const ly = up ? Math.min(a.y, b.y) - 8 : Math.max(a.y, b.y) + 20;
         label(ctx, `${dp >= 0 ? '+' : ''}${fmt(dp)} (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%) · ${bars} bars · ${dur}`, (a.x + b.x) / 2, ly, '#fff', col + '0.95)', 'center');
+        break;
+      }
+      case 'brush': {
+        if (pts.length < 2) break;
+        ctx.beginPath(); ctx.strokeStyle = c; ctx.lineWidth = s.w || 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+        ctx.moveTo(pts[0].x, pts[0].y); for (let k = 1; k < pts.length; k++) ctx.lineTo(pts[k].x, pts[k].y); ctx.stroke();
         break;
       }
       case 'text': {
@@ -207,6 +214,10 @@ export function attachDrawing(o) {
     }
   }
   function handles(ctx, s) {
+    if (s.type === 'brush') {                     // a freehand line: just mark both ends
+      [s.pts[0], s.pts[s.pts.length - 1]].forEach(pt => { const q = P(pt); if (!ok(q)) return; ctx.beginPath(); ctx.fillStyle = s.color || '#2962ff'; ctx.arc(q.x, q.y, 3.5, 0, 7); ctx.fill(); });
+      return;
+    }
     s.pts.forEach(pt => {
       const q = P(pt); if (!ok(q)) return;
       ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.strokeStyle = s.color || '#2962ff'; ctx.lineWidth = 2; ctx.arc(q.x, q.y, 5, 0, 7); ctx.fill(); ctx.stroke();
@@ -221,6 +232,7 @@ export function attachDrawing(o) {
     const W = paneW(mediaSize), H = mediaSize.height;
     if (!hidden) shapes.forEach(s => draw(ctx, s, W, H));
     if (measure) draw(ctx, measure, W, H);
+    if (stroke) draw(ctx, stroke, W, H);
     const pv = preview(); if (pv) { ctx.globalAlpha = 0.75; draw(ctx, pv, W, H); ctx.globalAlpha = 1; }
     if (selected && !hidden) handles(ctx, selected);
     if (tool !== 'cursor') pending.forEach(pt => { const q = P(pt); if (ok(q)) { ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(q.x, q.y, 3.5, 0, 7); ctx.fill(); } });
@@ -235,6 +247,7 @@ export function attachDrawing(o) {
       const [a, b] = pts, near = 6;
       switch (s.type) {
         case 'trend': if (distSeg(x, y, a, b) < near) return s; break;
+        case 'brush': { for (let k = 1; k < pts.length; k++) if (distSeg(x, y, pts[k - 1], pts[k]) < near) return s; break; }
         case 'ray': if (distSeg(x, y, a, rayEnd(a, b, W)) < near) return s; break;
         case 'h': if (Math.abs(y - a.y) < near) return s; break;
         case 'hray': if (Math.abs(y - a.y) < near && x >= a.x - near) return s; break;
@@ -245,7 +258,8 @@ export function attachDrawing(o) {
           break;
         }
         case 'text': { const z = s.lsize || 13, ls = String(s.text || 'Text').split('\n'); if (x >= a.x - 4 && x <= a.x + z * 0.62 * Math.max(...ls.map(l => l.length)) + 8 && y >= a.y - z - 3 && y <= a.y + (ls.length - 1) * (z + 3) + 4) return s; break; }
-        case 'fib': { const x1 = Math.min(a.x, b.x); if (x >= x1 && y >= Math.min(a.y, b.y) - 4 && y <= Math.max(a.y, b.y) + 4) return s; break; }
+        case 'fib': { const x1 = Math.min(a.x, b.x), pr = l => s.pts[1].p + (s.pts[0].p - s.pts[1].p) * l, ys = FIB.map(l => Y(pr(l))).filter(v => v != null);
+          if (x >= x1 && ys.some(v => Math.abs(v - y) < 6)) return s; break; }
         case 'long': case 'short': {
           let x2 = X(posEnd(s)); if (x2 - a.x < 60) x2 = a.x + 140;
           const ys = pts[1].y, yt = pts[2] ? pts[2].y : a.y;
@@ -257,7 +271,7 @@ export function attachDrawing(o) {
     return null;
   }
   function hitHandle(s, x, y) {
-    if (!s) return -1;
+    if (!s || s.type === 'brush') return -1;
     return s.pts.findIndex(pt => { const q = P(pt); return ok(q) && Math.hypot(q.x - x, q.y - y) < 8; });
   }
 
@@ -291,7 +305,7 @@ export function attachDrawing(o) {
     if (!selected) { selBar.style.display = 'none'; return; }
     selBar.style.display = 'flex';
     selBar.innerHTML = COLORS.map(c => `<button class="sw ${selected.color === c ? 'on' : ''}" data-c="${c}" style="background:${c}" title="Colour"></button>`).join('') +
-      (selected.type !== 'measure' ? `<button class="tb ${editing ? 'on' : ''}" data-a="edit" title="Write text on this drawing (double-click it)">T Text</button>` : '') +
+      (selected.type !== 'measure' && selected.type !== 'brush' ? `<button class="tb ${editing ? 'on' : ''}" data-a="edit" title="Write text on this drawing (double-click it)">T Text</button>` : '') +
       (['h', 'hray', 'trend', 'ray'].includes(selected.type) ? '<button class="tb" data-a="alert" title="Alert when price crosses this line">🔔 Alert</button>' : '') +
       `<button class="tb" data-a="clone" title="Clone">Clone</button><button class="tb" data-a="del" title="Delete (Del)">${svg('trash')}</button>` +
       (editing ? textEditor(selected) : '');
@@ -364,7 +378,7 @@ export function attachDrawing(o) {
   // ── placing points (clicks while a tool is active)
   function finishShape() {
     const before = snap();
-    const s = { id: Math.random().toString(36).slice(2), type: tool, pts: pending.slice(0, NEED[tool]), color };
+    const s = { id: Math.random().toString(36).slice(2), type: tool, pts: pending.slice(0, NEED[tool]), color: tool === 'fib' ? (o.theme === 'light' ? '#131722' : '#d1d4dc') : color };
     if (tool === 'measure') { measure = s; setTool('cursor'); redraw(); return; }
     if (tool === 'text') s.text = 'Text';
     shapes.push(s); selected = s; commit(before);
@@ -372,7 +386,7 @@ export function attachDrawing(o) {
     setTool('cursor'); editing = wasText; renderSelBar(); if (wasText) focusEditor(); redraw();
   }
   // clicks are read straight from the mouse (more reliable than the chart's click event for fast clicks)
-  let press = null;
+  let press = null, stroke = null;
   function place(x, y) {
     const pt = pointAt(x, y); if (!pt) return;
     pending.push(pt);
@@ -388,6 +402,13 @@ export function attachDrawing(o) {
       const pt = pointAt(x, y); if (!pt) return;
       measure = null; setTool('measure'); pending = [pt]; redraw(); return;
     }
+    if (tool === 'brush') {                               // freehand: collect points while the button is held
+      const l = ts.coordinateToLogical(x), p = cs.coordinateToPrice(y); if (l == null || p == null) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      chart.applyOptions({ handleScroll: false, handleScale: false });
+      stroke = { id: Math.random().toString(36).slice(2), type: 'brush', pts: [{ t: logicalToTime(l), p }], color, w: 2, lx: x, ly: y };
+      return;
+    }
     if (tool !== 'cursor') { press = { x, y }; return; }   // placing a point: decided on mouse up
     if (measure) { measure = null; redraw(); }
     let s = selected && hitHandle(selected, x, y) >= 0 ? selected : hitShape(x, y);
@@ -401,6 +422,14 @@ export function attachDrawing(o) {
     drag = { s, hIdx, x0: x, y0: y, l0: ts.coordinateToLogical(x), p0: cs.coordinateToPrice(y), orig: JSON.parse(JSON.stringify(s.pts)), before: snap(), moved: false };
   };
   const onMove = e => {
+    if (stroke) {
+      e.stopPropagation();
+      const { x, y } = local(e);
+      if (Math.hypot(x - stroke.lx, y - stroke.ly) < 2.5) return;
+      const l = ts.coordinateToLogical(x), p = cs.coordinateToPrice(y); if (l == null || p == null) return;
+      stroke.pts.push({ t: logicalToTime(l), p }); stroke.lx = x; stroke.ly = y; redraw();
+      return;
+    }
     if (!drag) {
       if (tool === 'cursor' && !hidden) { const { x, y } = local(e); el.style.cursor = hitShape(x, y) ? 'pointer' : ''; }
       return;
@@ -415,11 +444,19 @@ export function attachDrawing(o) {
       const l = ts.coordinateToLogical(x), p = cs.coordinateToPrice(y);
       if (l == null || p == null || drag.l0 == null || drag.p0 == null) return;
       const dl = Math.round(l - drag.l0), dp = p - drag.p0;
-      drag.s.pts = drag.orig.map(q => ({ t: logicalToTime(Math.round(timeToLogical(q.t)) + dl), p: q.p + dp }));
+      drag.s.pts = drag.s.type === 'brush' ? drag.orig.map(q => ({ t: logicalToTime(timeToLogical(q.t) + dl), p: q.p + dp }))
+        : drag.orig.map(q => ({ t: logicalToTime(Math.round(timeToLogical(q.t)) + dl), p: q.p + dp }));
     }
     syncLines(); redraw();
   };
   const onUp = e => {
+    if (stroke) {
+      chart.applyOptions({ handleScroll: true, handleScale: true });
+      const s0 = stroke; stroke = null; delete s0.lx; delete s0.ly;
+      if (s0.pts.length >= 2) { const before = snap(); shapes.push(s0); selected = s0; commit(before); }
+      setTool('cursor'); renderSelBar(); redraw();
+      return;
+    }
     if (press) {
       const { x, y } = local(e), p0 = press; press = null;
       if (tool !== 'cursor' && Math.hypot(x - p0.x, y - p0.y) < 5) place(x, y);
@@ -442,7 +479,7 @@ export function attachDrawing(o) {
   window.addEventListener('pointerup', onUp, true);
 
   // ── keyboard (TradingView shortcuts)
-  const ALT = { KeyT: 'trend', KeyH: 'h', KeyJ: 'hray', KeyV: 'v', KeyP: 'channel', KeyF: 'fib', KeyL: 'long', KeyS: 'short', KeyN: 'text' };
+  const ALT = { KeyB: 'brush', KeyT: 'trend', KeyH: 'h', KeyJ: 'hray', KeyV: 'v', KeyP: 'channel', KeyF: 'fib', KeyL: 'long', KeyS: 'short', KeyN: 'text' };
   function onKey(e) {
     if (e.key === 'Escape') { if (tool !== 'cursor') setTool('cursor'); else { selected = null; measure = null; renderSelBar(); redraw(); } return true; }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {

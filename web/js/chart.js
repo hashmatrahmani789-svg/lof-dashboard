@@ -23,13 +23,13 @@ export const abbr = v => {
 // colours you can change in Settings → Colours
 export const DEFAULT_COLORS = {
   up: '#26a69a', dn: '#ef5350',
-  imp1: '#ffd600', imp2: '#ff9100', imp3: '#d500f9',
+  imp1: '#ffa726', imp2: '#26c6da', imp3: '#1e1eff',
   ema12: '#26c6da', ema21: '#ffb74d', ema50: '#e0e0e0', ema200: '#ab47bc', tema15: '#00e676', tema30: '#ff5252',
   stUp: '#26a69a', stDn: '#ef5350', macd: '#2962ff', macdSig: '#ff6d00', macdHistUp: '#26a69a', macdHistUp2: '#b2dfdb', macdHistDn: '#ef5350', macdHistDn2: '#ffcdd2', vwapD: '#ffeb3b', vwapW: '#ff9800', vwapSH: '#f48fb1', vwapSL: '#80cbc4', rsi: '#7e57c2', atr: '#ff7043',
   london: '#2962ff', ny: '#f9a825', sAsia: '#b39ddb', sLdn: '#5b7fff', sNy: '#ffb74d', fvgBull: '#26a69a', fvgBear: '#ef5350', alert: '#ff9800',
 };
 export const COLOR_NAMES = {
-  up: 'Candle up', dn: 'Candle down', imp1: 'Impulse (up filled, down hollow)', imp2: 'Double impulse', imp3: 'Triple impulse', ema12: 'EMA 12', ema21: 'EMA 21', ema50: 'EMA 50', ema200: 'EMA 200',
+  up: 'Candle up', dn: 'Candle down', imp1: 'Impulse detector 1', imp2: 'Impulse detector 2', imp3: 'Impulse detector 3', ema12: 'EMA 12', ema21: 'EMA 21', ema50: 'EMA 50', ema200: 'EMA 200',
   tema15: 'TEMA 15', tema30: 'TEMA 30', stUp: 'Supertrend up', stDn: 'Supertrend down', vwapD: 'VWAP day', vwapW: 'VWAP week',
   vwapSH: 'AVWAP from swing high', vwapSL: 'AVWAP from swing low', rsi: 'RSI', atr: 'ATR', macd: 'MACD line', macdSig: 'MACD signal', macdHistUp: 'MACD hist up (growing)', macdHistUp2: 'MACD hist up (falling)',
   macdHistDn: 'MACD hist down (growing)', macdHistDn2: 'MACD hist down (falling)', london: 'London session', ny: 'New York session',
@@ -116,13 +116,24 @@ export function buildChart(host, D) {
 
   // ── impulse (displacement) candles: body ≥ K × average body of the previous 20 and ≥ 60% of the range.
   // Double impulse: ≥ (K + 1) ×, triple impulse: ≥ (K + 2) ×. Each level has its own colour.
-  const K = D.impulseMult || 2.0, N0 = 20;
+  // Triple impulsive candle detector (3 detectors, like the TradingView script): a candle passes a detector when
+  //   body ≥ size × average body (length), volume ≥ volume multiplier × average volume (length), body ÷ range ≥ ratio.
+  // Detector 3 wins over 2, and 2 over 1.
+  const DET = D.impDet || [{ len: 10, size: 1.5, vol: 1.5, ratio: 0.7 }, { len: 14, size: 2, vol: 2, ratio: 0.6 }, { len: 20, size: 2.5, vol: 3, ratio: 0.5 }];
+  const VOL = D.vol || [];
+  function passes(i, d) {
+    const n = Math.max(1, Math.round(d.len)); if (i < n - 1) return false;
+    let sb = 0, sv = 0;
+    for (let k = i - n + 1; k <= i; k++) { sb += Math.abs(C[k].close - C[k].open); sv += VOL[k] || 0; }
+    const c = C[i], body = Math.abs(c.close - c.open), rng = c.high - c.low, ab = sb / n, av = sv / n;
+    if (!(rng > 0 && ab > 0)) return false;
+    const volOk = av > 0 ? (VOL[i] || 0) >= d.vol * av : true;          // markets without volume: size and ratio only
+    return body >= d.size * ab && volOk && body / rng >= d.ratio;
+  }
   function impulseTier(i) {
-    if (!L.impulse || i < N0) return 0;
-    let s = 0; for (let k = i - N0; k < i; k++) s += Math.abs(C[k].close - C[k].open);
-    const avg = s / N0, c = C[i], body = Math.abs(c.close - c.open), rng = c.high - c.low;
-    if (!(avg > 0 && rng > 0 && body / rng >= 0.6)) return 0;
-    return body >= (K + 2) * avg ? 3 : body >= (K + 1) * avg ? 2 : body >= K * avg ? 1 : 0;
+    if (!L.impulse) return 0;
+    for (let t = 3; t >= 1; t--) if (DET[t - 1] && DET[t - 1].on !== false && passes(i, DET[t - 1])) return t;
+    return 0;
   }
   const HA = [];                 // Heikin Ashi candles (display only; levels and drawings use real prices)
   function haAt(i) {
@@ -138,7 +149,7 @@ export function buildChart(host, D) {
     const o = { time: sh(c.time), open: src.open, high: src.high, low: src.low, close: src.close };
     const tier = TYPE !== 'heikin' ? impulseTier(i) : 0;
     // one colour per level for both directions: up = filled, down = hollow (outline only)
-    if (tier) { const col = COL['imp' + tier], up = c.close >= c.open; o.color = TYPE === 'bars' ? col : up ? col : 'rgba(0,0,0,0)'; o.wickColor = col; o.borderColor = col; }
+    if (tier) { const col = COL['imp' + tier], up = c.close >= c.open; o.color = TYPE === 'bars' || !D.impHollow ? col : up ? col : 'rgba(0,0,0,0)'; o.wickColor = col; o.borderColor = col; }
     return o;
   }
   cs.setData(C.map((_, i) => styled(i)));
@@ -240,29 +251,18 @@ export function buildChart(host, D) {
   if (ps.length > 1) { ps[0].setStretchFactor(ps.length > 3 ? 3 : 2.4); for (let i = 1; i < ps.length; i++) ps[i].setStretchFactor(1); }
 
   // CVD lines start at 0 on the first visible candle (like Coinalyze)
+  // CVD counts from the first loaded candle (like Coinalyze), so zooming and scrolling never change the values
   function cvdData(raw) {
     if (!raw || !raw.length) return [];
-    const r = chart.timeScale().getVisibleLogicalRange();
-    const i0 = r ? Math.max(0, Math.min(C.length - 1, Math.ceil(r.from))) : 0;
-    const t0 = C.length ? C[i0].time : raw[0].time;
-    let j = raw.findIndex(p => p.time >= t0); if (j < 0) j = raw.length - 1;
-    const out = new Array(raw.length);
     let acc = 0;
-    for (let k = j; k < raw.length; k++) { acc += raw[k].value; out[k] = { time: sh(raw[k].time), value: acc }; }
-    acc = 0;
-    for (let k = j - 1; k >= 0; k--) { acc -= raw[k + 1].value; out[k] = { time: sh(raw[k].time), value: acc }; }
-    return out;
+    return raw.map(p => { acc += p.value; return { time: sh(p.time), value: acc }; });
   }
   function setSeries(rec, data) {
     rec.raw = data || [];
     if (rec.def.cvd) rec.api.setData(cvdData(rec.raw));
     else rec.api.setData(rec.raw.map(p => Object.assign({}, p, { time: sh(p.time) })));
   }
-  let cvdTimer = null;
-  chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-    clearTimeout(cvdTimer);
-    cvdTimer = setTimeout(() => { if (!dead) Object.values(paneSeries).flat().forEach(rec => { if (rec.def.cvd) rec.api.setData(cvdData(rec.raw)); }); }, 120);
-  });
+  const cvdTimer = null;
 
   // ── helpers shared by layers / drawings
   const RT = () => C.map(c => c.time);
@@ -515,7 +515,7 @@ export function buildChart(host, D) {
 
   // ── drawing tools (TradingView-style, saved per market in this browser)
   const drawing = attachDrawing({ chart, cs, el, root: host, C, X, Y, timeToLogical, logicalToTime, fmt, coin: D.coin, primitive, LC, paneW, STEP,
-    onAlert: a => D.onAddAlert && D.onAddAlert(a), onSave: D.onDrawingsSaved, initial: D.drawings });
+    onAlert: a => D.onAddAlert && D.onAddAlert(a), onSave: D.onDrawingsSaved, initial: D.drawings, theme: D.theme });
 
   // ── legend (OHLC of the candle under the mouse)
   function showLegend(i) {
