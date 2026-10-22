@@ -1,7 +1,7 @@
 // TradingView-style chart (TradingView Lightweight Charts v5, Apache-2.0) with LOF layers and drawing tools.
 import { nyMinutes } from './engine.js';
 import { attachDrawing } from './drawing.js';
-import { makeIndicators, fairValueGaps, sessionLevels } from './indicators.js';
+import { makeIndicators, fairValueGaps, sessionLevels, liquidityPools } from './indicators.js';
 
 const LC = window.LightweightCharts;
 // The chart library has no time zones: each chart shifts its times by the chosen zone's offset (see buildChart).
@@ -26,14 +26,14 @@ export const DEFAULT_COLORS = {
   imp1: '#ffa726', imp2: '#26c6da', imp3: '#1e1eff',
   ema12: '#26c6da', ema21: '#ffb74d', ema50: '#e0e0e0', ema200: '#ab47bc', tema15: '#00e676', tema30: '#ff5252',
   stUp: '#26a69a', stDn: '#ef5350', macd: '#2962ff', macdSig: '#ff6d00', macdHistUp: '#26a69a', macdHistUp2: '#b2dfdb', macdHistDn: '#ef5350', macdHistDn2: '#ffcdd2', vwapD: '#ffeb3b', vwapW: '#ff9800', vwapSH: '#f48fb1', vwapSL: '#80cbc4', rsi: '#7e57c2', atr: '#ff7043',
-  london: '#2962ff', ny: '#f9a825', sAsia: '#b39ddb', sLdn: '#5b7fff', sNy: '#ffb74d', fvgBull: '#26a69a', fvgBear: '#ef5350', alert: '#ff9800',
+  london: '#2962ff', ny: '#f9a825', sAsia: '#b39ddb', sLdn: '#5b7fff', sNy: '#ffb74d', fvgBull: '#26a69a', fvgBear: '#ef5350', alert: '#ff9800', liqHigh: '#e040fb', liqLow: '#00b8d4',
 };
 export const COLOR_NAMES = {
   up: 'Candle up', dn: 'Candle down', imp1: 'Impulse detector 1', imp2: 'Impulse detector 2', imp3: 'Impulse detector 3', ema12: 'EMA 12', ema21: 'EMA 21', ema50: 'EMA 50', ema200: 'EMA 200',
   tema15: 'TEMA 15', tema30: 'TEMA 30', stUp: 'Supertrend up', stDn: 'Supertrend down', vwapD: 'VWAP day', vwapW: 'VWAP week',
   vwapSH: 'AVWAP from swing high', vwapSL: 'AVWAP from swing low', rsi: 'RSI', atr: 'ATR', macd: 'MACD line', macdSig: 'MACD signal', macdHistUp: 'MACD hist up (growing)', macdHistUp2: 'MACD hist up (falling)',
   macdHistDn: 'MACD hist down (growing)', macdHistDn2: 'MACD hist down (falling)', london: 'London session', ny: 'New York session',
-  sAsia: 'Asia high / low', sLdn: 'London high / low', sNy: 'New York high / low', fvgBull: 'Bullish FVG', fvgBear: 'Bearish FVG', alert: 'Alerts',
+  sAsia: 'Asia high / low', sLdn: 'London high / low', sNy: 'New York high / low', fvgBull: 'Bullish FVG', fvgBear: 'Bearish FVG', alert: 'Alerts', liqHigh: 'Liquidity above (EQH / BSL)', liqLow: 'Liquidity below (EQL / SSL)',
 };
 const hexA = (hex, a) => { const h = hex.replace('#', ''); const n = parseInt(h.length === 3 ? h.split('').map(x => x + x).join('') : h.slice(0, 6), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
 
@@ -238,8 +238,9 @@ export function buildChart(host, D) {
       shape: d.bull ? 'arrowUp' : 'arrowDown', text: d.text, size: 1 })));
   }
   setDivs();
-  let FVG = L.fvg ? fairValueGaps(C) : [], SL = L.sesshl && STEP <= 3600 ? sessionLevels(C) : [];
-  const recalcZones = () => { FVG = L.fvg ? fairValueGaps(C) : []; SL = L.sesshl && STEP <= 3600 ? sessionLevels(C) : []; };
+  const liqCalc = () => (L.liqEq || L.liqSwing ? liquidityPools(C, { eq: !!L.liqEq, swing: !!L.liqSwing }) : []);
+  let FVG = L.fvg ? fairValueGaps(C) : [], SL = L.sesshl && STEP <= 3600 ? sessionLevels(C) : [], LIQ = liqCalc();
+  const recalcZones = () => { FVG = L.fvg ? fairValueGaps(C) : []; SL = L.sesshl && STEP <= 3600 ? sessionLevels(C) : []; LIQ = liqCalc(); };
 
   // log / % scale applies to the price pane only; lower panes (volume, OI, CVD…) stay normal
   function applyScaleModes() {
@@ -389,6 +390,17 @@ export function buildChart(host, D) {
       const col = g.bull ? COL.fvgBull : COL.fvgBear, open = g.end == null;
       ctx.fillStyle = hexA(col, open ? 0.16 : 0.06); ctx.fillRect(x1, yt, Math.min(x2, W) - x1, yb - yt);
       if (open && Math.abs(yb - yt) > 9) text(ctx, 'FVG', x1 + 3, Math.min(yt, yb) + 10, hexA(col, 0.9));
+    });
+    // liquidity pools: equal highs / lows and untaken swing highs / lows; stop at the sweep candle with ✓
+    LIQ.forEach(q => {
+      const y = Y(q.price), x1 = X(q.t0); if (y == null || x1 == null) return;
+      const x2 = q.end != null ? X(q.end) : W; if (x2 == null || x2 < 0 || x1 > W) return;
+      const col = q.high ? COL.liqHigh : COL.liqLow, swept = q.end != null, eqk = q.kind === 'EQH' || q.kind === 'EQL';
+      ctx.globalAlpha = swept ? 0.45 : 1;
+      hline(ctx, Math.max(0, x1), Math.min(x2, W), y, col, eqk ? [] : [5, 3], eqk ? 1.6 : 1.1);
+      if (eqk) { ctx.beginPath(); ctx.fillStyle = col; ctx.arc(x1, y, 2.5, 0, 7); ctx.fill(); }
+      rlabel(`${q.kind}${q.n > 2 ? ' ×' + q.n : ''} ${fmt(q.price)}${swept ? ' ✓' : ''}`, Math.min(x2, W) - 4, y - 3, col);
+      ctx.globalAlpha = 1;
     });
     // session highs / lows (sweep targets): solid until swept, then it stops at the sweep candle
     SL.forEach(s => {

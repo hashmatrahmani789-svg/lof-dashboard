@@ -204,3 +204,57 @@ export function sessionLevels(C, days = 5) {
   });
   return out.slice(-days * 3);
 }
+
+// ── Liquidity pools: equal highs / lows (EQH / EQL) and untaken swing highs / lows (BSL / SSL).
+// A line runs right while the liquidity is still there; once price trades through it, it stops at that candle (swept ✓).
+export function liquidityPools(C, { eq = true, swing = true, piv = 3, major = 8, tolAtr = 0.15, maxEach = 6 } = {}) {
+  const N = C.length, out = [];
+  if (N < 30) return out;
+  const a = Math.max(major, N - 800);
+  let atr = 0; for (let i = Math.max(1, N - 100); i < N; i++) atr += Math.max(C[i].high - C[i].low, Math.abs(C[i].high - C[i - 1].close), Math.abs(C[i].low - C[i - 1].close));
+  atr /= Math.min(99, N - 1);
+  const tol = atr * tolAtr;
+  const isPH = (i, p) => { for (let k = 1; k <= p; k++) if (i - k < 0 || i + k >= N || C[i].high < C[i - k].high || C[i].high <= C[i + k].high) return false; return true; };
+  const isPL = (i, p) => { for (let k = 1; k <= p; k++) if (i - k < 0 || i + k >= N || C[i].low > C[i - k].low || C[i].low >= C[i + k].low) return false; return true; };
+  const sweepAfter = (from, price, high) => { for (let j = from + 1; j < N; j++) if (high ? C[j].high > price : C[j].low < price) return j; return -1; };
+  if (eq) {
+    [[true, isPH, 'EQH'], [false, isPL, 'EQL']].forEach(([high, isP, tag]) => {
+      const piv2 = []; for (let i = a; i < N - piv; i++) if (isP(i, piv)) piv2.push(i);
+      const used = new Set(), res = [];
+      for (let x = piv2.length - 1; x >= 0; x--) {
+        const i = piv2[x]; if (used.has(i)) continue;
+        const pi = high ? C[i].high : C[i].low, grp = [i];
+        // earlier pivots at (almost) the same price, with no candle in between trading through the group
+        for (let y = x - 1; y >= 0 && piv2[x] - piv2[y] <= 150; y--) {
+          const j = piv2[y], pj = high ? C[j].high : C[j].low;
+          if (Math.abs(pj - pi) > tol) continue;
+          const lvl = high ? Math.max(pi, pj) : Math.min(pi, pj);
+          let broken = false; for (let k = j + 1; k < grp[grp.length - 1]; k++) if (high ? C[k].high > lvl + tol * 0.5 : C[k].low < lvl - tol * 0.5) { broken = true; break; }
+          if (!broken) grp.push(j);
+        }
+        if (grp.length < 2) continue;
+        grp.forEach(g => used.add(g));
+        const first = Math.min(...grp), last = Math.max(...grp);
+        const price = high ? Math.max(...grp.map(g => C[g].high)) : Math.min(...grp.map(g => C[g].low));
+        const sj = sweepAfter(last, price, high);
+        if (sj >= 0 && N - sj > 120) continue;
+        res.push({ kind: tag, high, price, t0: C[first].time, n: grp.length, end: sj >= 0 ? C[sj].time : null });
+      }
+      out.push(...res.filter(r => r.end == null).slice(0, maxEach), ...res.filter(r => r.end != null).slice(0, 3));
+    });
+  }
+  if (swing) {
+    [[true, isPH, 'BSL'], [false, isPL, 'SSL']].forEach(([high, isP, tag]) => {
+      const res = [];
+      for (let i = N - major - 1; i >= a && res.length < maxEach + 3; i--) {
+        if (!isP(i, major)) continue;
+        const price = high ? C[i].high : C[i].low, sj = sweepAfter(i, price, high);
+        if (sj >= 0 && N - sj > 60) continue;
+        if (out.some(o => o.high === high && Math.abs(o.price - price) <= tol)) continue;      // already shown as EQH / EQL
+        res.push({ kind: tag, high, price, t0: C[i].time, n: 1, end: sj >= 0 ? C[sj].time : null });
+      }
+      out.push(...res.filter(r => r.end == null).slice(0, maxEach), ...res.filter(r => r.end != null).slice(0, 2));
+    });
+  }
+  return out;
+}

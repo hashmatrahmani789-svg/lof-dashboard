@@ -16,7 +16,7 @@ const { $, esc, toast } = UI;
 const OPENS = [['Daily open', 'd_open', '#e0e0e0'], ['NY midnight', 'ny_mid', '#00bcd4'], ['London open', 'ldn_open', '#5b7fff'],
   ['NY open', 'ny_open', '#ff9800'], ['Weekly open', 'w_open', '#ce93d8'], ['Monthly open', 'm_open', '#8d6e63']];
 const LINE_LAYERS = ['EMA 12', 'EMA 21', 'EMA 50', 'Impulse candles', 'Volume MA', 'Levels', 'Value areas (VAH / VAL)', ...OPENS.map(o => o[0]), 'Trade plan'];
-const ZONE_LAYERS = ['Asia range', 'Sessions', 'Session highs / lows', 'Fair value gaps', 'VP prev 4H', 'VP visible range', 'News (CPI, FOMC…)'];
+const ZONE_LAYERS = ['Asia range', 'Sessions', 'Session highs / lows', 'Liquidity: equal highs / lows', 'Liquidity: swing highs / lows', 'Fair value gaps', 'VP prev 4H', 'VP visible range', 'News (CPI, FOMC…)'];
 const OPEN_SHORT = { d_open: 'DO', ny_mid: 'NYM', ldn_open: 'LO', ny_open: 'NO', w_open: 'WO', m_open: 'MO' };
 const HIST_ROWS = [['d_open', 'Daily opens'], ['w_open', 'Weekly opens'], ['m_open', 'Monthly opens'], ['ny_mid', 'NY midnight opens'],
   ['ldn_open', 'London opens'], ['ny_open', 'NY opens'], ['pdhl', 'Previous day highs / lows'], ['pwhl', 'Previous week highs / lows']];
@@ -44,7 +44,7 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.11';
+const VERSION = 'v8.12';
 let cfg;
 try { cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { cfg = Object.assign({}, DEFAULTS); }
 cfg.params = Object.assign({}, DEFAULTS.params, cfg.params);
@@ -63,6 +63,7 @@ if (!cfg.seenV85) {
   if (cfg.lines.includes('Levels') && !cfg.lines.includes('Value areas (VAH / VAL)')) cfg.lines.push('Value areas (VAH / VAL)');
   cfg.seenV85 = true;
 }
+if (!cfg.seenLiq) { ['Liquidity: equal highs / lows', 'Liquidity: swing highs / lows'].forEach(z => { if (!cfg.zones.includes(z)) cfg.zones.push(z); }); cfg.seenLiq = true; }
 if (!cfg.seenNews) { if (!cfg.zones.includes('News (CPI, FOMC…)')) cfg.zones = cfg.zones.concat(['News (CPI, FOMC…)']); cfg.seenNews = true; }
 const saveCfg = () => { try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* ignore */ } };
 
@@ -294,7 +295,8 @@ function layersObj() {
   const L = cfg.lines, Z = cfg.zones;
   return { ema12: L.includes('EMA 12'), ema21: L.includes('EMA 21'), ema50: L.includes('EMA 50'), impulse: L.includes('Impulse candles'),
     asia: Z.includes('Asia range'), sessions: Z.includes('Sessions'), vp4h: Z.includes('VP prev 4H'),
-    vp_visible: Z.includes('VP visible range'), news: Z.includes('News (CPI, FOMC…)'), fvg: Z.includes('Fair value gaps'), sesshl: Z.includes('Session highs / lows') };
+    vp_visible: Z.includes('VP visible range'), news: Z.includes('News (CPI, FOMC…)'), fvg: Z.includes('Fair value gaps'), sesshl: Z.includes('Session highs / lows'),
+    liqEq: Z.includes('Liquidity: equal highs / lows'), liqSwing: Z.includes('Liquidity: swing highs / lows') };
 }
 const chartOpts = () => ({ theme: cfg.theme, tz: cfg.tz, chartType: cfg.chartType, colors: cfg.colors, ind: cfg.ind, impDet: cfg.impDet, impHollow: cfg.impHollow,
   layers: layersObj(), lines: cfg.lines, panes: cfg.panes });
@@ -687,7 +689,7 @@ function renderBar() {
     <h4>How many to show (past opens, highs / lows)</h4><div class="hist">${HIST_ROWS.map(([k, n]) => `<label>${n}<select data-h="${k}">${[1, 2, 3, 4, 5, 6, 8, 10].map(v => `<option ${+cfg.hist[k] === v ? 'selected' : ''}>${v}</option>`).join('')}</select></label>`).join('')}</div>`;
   const I = cfg.ind, num = (k, lo, hi, step = 1) => `<input type="number" data-n="${k}" min="${lo}" max="${hi}" step="${step}" value="${I[k]}">`;
   $('#mInd .pop').innerHTML = `<h4>Indicators</h4><div class="opts">${opt(IND_ROWS, IND_ROWS.filter(([k]) => I[k]).map(([k]) => k), 'ind')}</div>
-    <h4>Zones</h4><div class="opts">${opt([['Fair value gaps', 'Fair value gaps (FVG)'], ['Session highs / lows', 'Session highs / lows']], cfg.zones, 'z')}</div>
+    <h4>Zones &amp; liquidity</h4><div class="opts">${opt([['Liquidity: equal highs / lows', 'Liquidity: equal highs / lows (EQH / EQL)'], ['Liquidity: swing highs / lows', 'Liquidity: swing highs / lows (BSL / SSL)'], ['Fair value gaps', 'Fair value gaps (FVG)'], ['Session highs / lows', 'Session highs / lows']], cfg.zones, 'z')}</div>
     <h4>Settings</h4><div class="indset">
       <label>Supertrend length ${num('stLen', 1, 100)}</label><label>Supertrend factor ${num('stMult', 0.5, 10, 0.1)}</label>
       <label>RSI length ${num('rsiLen', 2, 100)}</label><label>ATR length ${num('atrLen', 1, 100)}</label>
