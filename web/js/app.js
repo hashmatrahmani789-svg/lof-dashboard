@@ -44,7 +44,7 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.15';
+const VERSION = 'v8.16';
 const METALS = { GOLD: 'XAU', SILVER: 'XAG' };
 const METALS_NAME = { GOLD: 'Gold', SILVER: 'Silver' };
 let cfg;
@@ -88,9 +88,20 @@ let WL = null, AL = null, CAL = null;
 const watchKeys = () => (WL ? WL.keys() : cfg.watch).filter(k => !API.METRICS[k] && !API.PULSE_KEYS.includes(k) && (API.TRADFI[k] || S.byBase[k] || !S.symbols.length));
 // screener: its own coin list
 const scanKeys = () => (WL ? WL.scanner() : cfg.watch).filter(k => API.TRADFI[k] || S.byBase[k]);
-function openPulse() {
-  const b = $('#tabs [data-tab="pulse"]'); if (b) b.click();
-  const c = $('#tabsCard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+// BTC.D / TOTAL etc.: full TradingView chart (CRYPTOCAP data) in a large window
+function openMetricChart(k) {
+  const d = API.METRICS[k]; if (!d) return;
+  const m = $('#modal');
+  const src = 'https://s.tradingview.com/widgetembed/?' + new URLSearchParams({ symbol: d.tv, interval: '240', theme: cfg.theme === 'light' ? 'light' : 'dark',
+    style: '1', timezone: 'Etc/UTC', hidesidetoolbar: '0', symboledit: '0', saveimage: '0', withdateranges: '1', locale: 'en' });
+  m.innerHTML = `<div class="mbox mchart"><h3><span>${logo(k, 18)} <b>${esc(d.short)}</b> <span class="muted">${esc(d.name)} · TradingView</span></span><button class="icon-btn" data-x>✕</button></h3>
+    <iframe src="${esc(src)}" title="${esc(d.short)} chart" allowfullscreen></iframe></div>`;
+  m.hidden = false;
+  const close = () => { m.hidden = true; m.innerHTML = ''; document.removeEventListener('keydown', esc1); };
+  const esc1 = e => { if (e.key === 'Escape') close(); };
+  m.querySelector('[data-x]').onclick = close;
+  m.onclick = e => { if (e.target === m) close(); };
+  document.addEventListener('keydown', esc1);
 }
 function metricOf(k) {
   const d = API.METRICS[k], p = S.pulse;
@@ -950,7 +961,7 @@ async function start() {
     toast(esc(S.priceErr), 10000);
   }
   const scanByKey = () => Object.fromEntries(S.scan.map(x => [x.key, x.r]));
-  WL = createWatchlist({ byBase: () => S.byBase, tradfi: API.TRADFI, onPick: k => API.METRICS[k] ? openPulse() : loadAsset(k), current: () => S.asset, fallbackWatch: cfg.watch,
+  WL = createWatchlist({ byBase: () => S.byBase, tradfi: API.TRADFI, onPick: k => API.METRICS[k] ? openMetricChart(k) : loadAsset(k), current: () => S.asset, fallbackWatch: cfg.watch,
     scanInfo: k => scanByKey()[k], metric: metricOf, onChange: () => renderQuick(),
     onScanner: () => { renderScanEdit(); S.scan = S.scan.filter(x => WL.scanner().includes(x.key)); X.renderScreener(S.scan, S.asset, loadAsset, 'Screener · updating…'); clearTimeout(S.wlScan); S.wlScan = setTimeout(runScan, 1200); } });
   renderScanEdit();

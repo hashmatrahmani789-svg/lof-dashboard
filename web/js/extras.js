@@ -264,10 +264,10 @@ export function renderPulse(p, onOpen) {
       crypto.push(pt(l, p.crypto[k].toFixed(2) + '%', ch(H(k).chg, ' pts 24h'), ch(H(k).chg7, ' pts 7d'), s, note, up));
     });
   }
-  el.innerHTML = `<div class="pulse-h">Macro</div><div class="tiles">${macro.join('') || '<div class="muted">Unavailable</div>'}</div>
-    <div class="pulse-h">Sentiment</div><div class="tiles">${senti.join('') || '<div class="muted">Unavailable</div>'}</div>
-    <div class="pulse-h">Crypto</div><div class="tiles">${crypto.join('') || '<div class="muted">Unavailable</div>'}</div>
-    <div class="muted" style="margin-top:8px;font-size:11.5px">Macro: Yahoo Finance · Fear &amp; Greed: alternative.me (crypto), CNN (stocks) · Market caps and dominance: CoinGecko; their 7-day lines are estimated from the top 10 coins. Click a macro tile to open its chart. Refreshes every 5 minutes.</div>`;
+  // macro and crypto market tiles now live in the Main watchlist; this tab keeps sentiment only
+  void macro; void crypto;
+  el.innerHTML = `<div class="pulse-h">Sentiment</div><div class="tiles">${senti.join('') || '<div class="muted">Unavailable</div>'}</div>
+    <div class="muted" style="margin-top:8px;font-size:11.5px">Fear &amp; Greed: alternative.me (crypto), CNN (stocks) · VIX: Yahoo Finance. DXY, yields, oil, dominance and TOTAL are in your Main watchlist. Refreshes every 5 minutes.</div>`;
   el.querySelectorAll('[data-open]').forEach(t => t.onclick = () => onOpen(t.dataset.open));
 }
 

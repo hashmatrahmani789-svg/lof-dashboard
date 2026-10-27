@@ -103,7 +103,7 @@ export function createWatchlist(ctx) {
       const p = priceOf(k), info = ctx.scanInfo(k);
       const flash = p && !API.METRICS[k] && prev[k] != null && p.last !== prev[k] ? (p.last > prev[k] ? 'fu' : 'fd') : '';
       const sig = !info ? '' : info.decision !== 'WAIT' ? `<i class="sig ${info.decision === 'LONG' ? 'l' : 's'}" title="${info.decision} READY · ${esc(info.setup)}"></i>` : info.setup !== 'NONE' ? '<i class="sig w" title="Setup forming"></i>' : '';
-      const tip = API.METRICS[k] ? API.METRICS[k].name + ' (CoinGecko) · click to open Market Pulse' : ctx.tradfi[k] ? ctx.tradfi[k].name : '';
+      const tip = API.METRICS[k] ? API.METRICS[k].name + ' · click for chart' : ctx.tradfi[k] ? ctx.tradfi[k].name : '';
       return `<div class="wl-row ${k === cur ? 'on' : ''}" draggable="${sortBy ? 'false' : 'true'}" data-k="${esc(k)}" ${tip ? `title="${esc(tip)}"` : ''}>
         <span class="sym">${logo(k, 18)}${esc(label(k))}${sig}</span>
         <span class="num ${flash}">${p ? lastTxt(p) : '…'}</span>

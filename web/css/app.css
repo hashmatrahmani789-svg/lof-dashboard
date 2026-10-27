@@ -428,3 +428,9 @@ td.symc .logo { margin-right: 6px; }
 .scan-edit .chip .x { margin-left: 4px; font-weight: 400; opacity: .55; cursor: pointer; }
 .scan-edit .chip .x:hover { opacity: 1; color: var(--dn, #ef5350); }
 .scan-edit input { width: 150px; background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12.5px; }
+
+/* v8.16 TradingView chart window for BTC.D / TOTAL */
+.mbox.mchart { width: min(1200px, 96vw); padding: 10px 12px 12px; }
+.mbox.mchart h3 .muted { font-weight: 400; font-size: 12px; margin-left: 6px; }
+.mbox.mchart h3 > span { display: flex; align-items: center; gap: 6px; }
+.mbox.mchart iframe { width: 100%; height: min(720px, 78vh); border: 0; border-radius: 8px; background: var(--panel2); }
