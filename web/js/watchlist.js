@@ -52,7 +52,11 @@ export function createWatchlist(ctx) {
       const t = await API.allTickers();
       const map = ctx.byBase();
       for (const k of new Set(W.lists.flatMap(l => l.items))) {
-        const m = map[k]; if (!m || !t[m.sym]) continue;
+        const m = map[k]; if (!m) continue;
+        if (!t[m.sym] && m.metal) {      // gold / silver may be missing from the all-tickers list
+          try { const x = await API.ticker24(m.sym); t[m.sym] = { last: +x.lastPrice, chg: +x.priceChangePercent, vol: +x.quoteVolume }; } catch (e) { continue; }
+        }
+        if (!t[m.sym]) continue;
         prev[k] = prices[k] ? prices[k].last : null;
         prices[k] = t[m.sym];
       }

@@ -83,6 +83,12 @@ export async function klinesSince(sym, tf, fromSec) {
 export async function spotKlines(sym, tf, limit = 300) {
   return (await getJSON(`${SPOT}/api/v3/klines?symbol=${sym}&interval=${BN_TF[tf] || tf}&limit=${limit}`)).map(toBar);
 }
+// Gold / silver TradFi perps: some accounts don't get them in exchangeInfo, so ask for the price directly
+export async function probeSymbol(sym, base) {
+  const j = await getJSON(`${FAPI}/fapi/v1/ticker/price?symbol=${sym}`, {}, 8000);
+  const p = +j.price; if (!(p > 0)) throw new Error('no price');
+  return { sym, base, quote: 'USDT', prec: p >= 1000 ? 2 : 3, tick: p >= 1000 ? 0.01 : 0.001 };
+}
 export async function ticker24(sym) { return getJSON(`${FAPI}/fapi/v1/ticker/24hr?symbol=${sym}`); }
 // all Binance futures prices + 24h change + 24h volume in one call (for the watchlist)
 export async function allTickers() {

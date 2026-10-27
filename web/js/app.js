@@ -44,7 +44,7 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.16';
+const VERSION = 'v8.17';
 const METALS = { GOLD: 'XAU', SILVER: 'XAG' };
 const METALS_NAME = { GOLD: 'Gold', SILVER: 'Silver' };
 let cfg;
@@ -953,6 +953,8 @@ async function start() {
     S.symbols = await API.binanceSymbols();
     S.symbols.forEach(s => { if (!S.byBase[s.base]) S.byBase[s.base] = s; });
     // Gold and silver: use Binance's live TradFi perpetuals instead of delayed Yahoo futures when Binance lists them
+    await Promise.all(Object.values(METALS).filter(b => !S.byBase[b]).map(b =>
+      API.probeSymbol(b + 'USDT', b).then(s => { S.byBase[b] = s; S.symbols.push(s); }).catch(() => {})));
     for (const [k, b] of Object.entries(METALS)) {
       if (S.byBase[b]) { S.byBase[k] = Object.assign({}, S.byBase[b], { metal: k }); delete API.TRADFI[k]; }
     }
