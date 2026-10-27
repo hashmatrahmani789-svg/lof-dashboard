@@ -55,7 +55,7 @@ export function createWatchlist(ctx) {
 
   // ── rendering
   const panel = $('#wlPanel');
-  const label = k => ctx.tradfi[k] ? ctx.tradfi[k].short : k;
+  const label = k => ctx.tradfi[k] ? ctx.tradfi[k].short : ({ GOLD: 'Gold', SILVER: 'Silver' })[k] || k;
   const hue = k => [...k].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
   const vol = v => !v ? '' : v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : v.toFixed(0);
   function render() {

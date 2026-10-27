@@ -44,7 +44,9 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.12';
+const VERSION = 'v8.13';
+const METALS = { GOLD: 'XAU', SILVER: 'XAG' };
+const METALS_NAME = { GOLD: 'Gold', SILVER: 'Silver' };
 let cfg;
 try { cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { cfg = Object.assign({}, DEFAULTS); }
 cfg.params = Object.assign({}, DEFAULTS.params, cfg.params);
@@ -86,8 +88,9 @@ const watchKeys = () => (WL ? WL.keys() : cfg.watch).filter(k => API.TRADFI[k] |
 
 // ── search ──────────────────────────────────────────────────
 function allAssets() {
-  return Object.keys(API.TRADFI).map(k => ({ key: k, label: API.TRADFI[k].name, kind: 'Macro / futures' }))
-    .concat(S.symbols.map(s => ({ key: s.base, label: s.sym, kind: 'Binance perp' })));
+  const metals = Object.keys(METALS).filter(k => S.byBase[k] && S.byBase[k].metal).map(k => ({ key: k, label: `${S.byBase[k].sym} · Binance live`, kind: 'Gold & silver' }));
+  return metals.concat(Object.keys(API.TRADFI).map(k => ({ key: k, label: API.TRADFI[k].name, kind: 'Macro / futures' }))
+    .concat(S.symbols.map(s => ({ key: s.base, label: s.sym, kind: 'Binance perp' }))));
 }
 let qSel = 0, qItems = [];
 function renderSearch() {
@@ -128,7 +131,7 @@ function renderQuick() {
   const byKey = Object.fromEntries(S.scan.map(x => [x.key, x]));
   $('#quick').innerHTML = watchKeys().map(k => {
     const x = byKey[k], c = x ? x.chg24 : NaN, dot = x && x.r.decision !== 'WAIT' ? (x.r.decision === 'LONG' ? '🟢 ' : '🔴 ') : '';
-    return `<span class="chip ${k === S.asset ? 'on' : ''}" data-k="${esc(k)}">${dot}${logo(k, 15)}${esc(API.TRADFI[k] ? API.TRADFI[k].short : k)}${isNum(c) ? `<span class="d ${UI.tone(c)}">${UI.fpct(c, 1)}</span>` : ''}</span>`;
+    return `<span class="chip ${k === S.asset ? 'on' : ''}" data-k="${esc(k)}">${dot}${logo(k, 15)}${esc(API.TRADFI[k] ? API.TRADFI[k].short : (METALS_NAME[k] || k))}${isNum(c) ? `<span class="d ${UI.tone(c)}">${UI.fpct(c, 1)}</span>` : ''}</span>`;
   }).join('');
   $('#quick').querySelectorAll('[data-k]').forEach(el => el.onclick = () => loadAsset(el.dataset.k));
 }
@@ -144,6 +147,7 @@ function updateStatus() {
   else if (S.wsState !== 'live' && S.wsState !== 'polling') { c = 'y'; label = S.wsState === 'reconnecting' ? 'Reconnecting' : 'Connecting'; }
   else if (tickAge > 20) { c = 'y'; label = 'No ticks'; }
   else if (S.wsState === 'polling') label = 'Live · 2s';
+  else if (S.metal) { /* gold / silver: price only */ }
   else if (S.flow && S.flow.error) { c = 'y'; label = 'Flow error'; }
   else if (flowAge > 240) { c = 'y'; label = S.flow ? 'Flow stale' : 'Loading flow'; }
   dot.className = 'dot ' + c; txt.textContent = label;
@@ -151,7 +155,8 @@ function updateStatus() {
   lines.push(S.tradfi ? `<b>Price:</b> Yahoo Finance (${esc(S.ticker)}) · polled every 30s · last update ${UI.ago(tickAge)} ago`
     : `<b>Price:</b> Binance futures · ${S.wsState === 'polling' ? 'updating every 2 s (websocket blocked on this network)' : S.wsState === 'live' ? 'live websocket' : S.wsState} · last update ${UI.ago(tickAge)} ago`);
   if (S.priceErr) lines.push(`<span class="dn">${esc(S.priceErr)}</span>`);
-  if (!S.tradfi) lines.push(S.flow && S.flow.error ? `<b>Order flow:</b> <span class="dn">${esc(S.flow.error)}</span>` :
+  if (S.metal) lines.push('<b>Order flow:</b> not used for gold / silver (price only)');
+  else if (!S.tradfi) lines.push(S.flow && S.flow.error ? `<b>Order flow:</b> <span class="dn">${esc(S.flow.error)}</span>` :
     `<b>Order flow:</b> Coinalyze · updated ${UI.ago(flowAge)} ago · refreshes every 60s${S.flow && S.flow.calls != null ? ` · calls ${S.flow.calls}/40 per min` : ''}`);
   lines.push(`<b>Version:</b> ${VERSION}`);
   lines.push(`<b>Screener:</b> ${S.scanAt ? 'scanned ' + UI.ago(now - S.scanAt) + ' ago' : 'starting'} · every 3 min`);
@@ -358,7 +363,9 @@ function buildChartNow() {
     onNeedHistory: () => loadOlder(),
   }, alertHooks(S.asset, S.sym, S.tradfi, S.prec), overlays(S.r)));
   fillPanes();
-  $('#chartFoot').innerHTML = S.tradfi
+  $('#chartFoot').innerHTML = S.metal
+    ? `Binance ${esc(S.sym)} TradFi perpetual · live, 24/7 · price data only · scroll / + − to zoom · keys 1–9 timeframe, F full screen · Alt+A alert · ${VERSION}`
+    : S.tradfi
     ? `Yahoo Finance · ${esc(S.ticker)} · updates every 30 s · scroll / + − to zoom · drag (also up/down) · wheel on price axis to stretch · double-click axis to reset · keys 1–9 timeframe, F full screen · Alt+A alert`
     : `Binance ${esc(S.sym)} perpetual · live · OI / CVD / liquidations: Coinalyze (OI from ${cfg.oiMarkets} perp markets, CVD from the top 6 perp + 3 spot) · CVD counts from the first loaded candle (zoom doesn't change it) · scroll left for more history · keys 1–9 timeframe, F full screen, / search, Alt+A alert, right-click for more · ${VERSION}`;
 }
@@ -495,16 +502,17 @@ function runAnalysis() {
   S.lastRun = Date.now();
   let r;
   try {
-    const flow = S.tradfi ? null : (S.flow && !S.flow.error ? S.flow : null);
+    const noFlow = S.tradfi || S.metal;
+    const flow = noFlow ? null : (S.flow && !S.flow.error ? S.flow : null);
     r = analyze({ ltf: S.bars.ltf, daily: S.bars.daily, h4: S.bars.h4, m30: S.bars.m30, flow, snap: flow && flow.snap,
-      tradfi: S.tradfi, params: Object.assign({}, cfg.params, { manual: S.manual }) });
+      tradfi: noFlow, params: Object.assign({}, cfg.params, { manual: S.manual }) });
   } catch (e) { toast('Analysis error: ' + esc(e.message)); return; }
   S.r = r;
   if (S.tradfi) S.perf = perfFromDaily(S.bars.daily, r.price);
   renderPanels();
   if (S.chart) S.chart.setOverlays(overlays(r));
   // signals: record + alert (only when order flow is in, so the score is final)
-  if (r.decision !== 'WAIT' && (S.tradfi || (S.flow && !S.flow.error))) onReady(S.asset, S.sym, !S.tradfi, r, 'main');
+  if (r.decision !== 'WAIT' && (S.tradfi || S.metal || (S.flow && !S.flow.error))) onReady(S.asset, S.sym, !S.tradfi, r, 'main');
 }
 
 function renderPanels() {
@@ -596,14 +604,16 @@ async function loadAsset(key) {
   clearTimers(S.timers); clearTimers(S.chartTimers);
   if (S.ws) { S.ws.close(); S.ws = null; }
   Object.assign(S, { asset: key, tradfi: !!API.TRADFI[key], bars: {}, chartBars: [], flow: null, flowChart: null, cbp: null, cbOk: null,
-    r: null, ov: undefined, chg24: NaN, perf: null, manual: false, priceErr: null, lastTick: 0, wsState: 'connecting' });
+    r: null, ov: undefined, chg24: NaN, perf: null, manual: false, priceErr: null, lastTick: 0, wsState: 'connecting', metal: false });
   cfg.asset = key; saveCfg();
   if (S.tradfi) {
     const d = API.TRADFI[key];
     Object.assign(S, { ticker: d.t, sym: d.t, base: key, title: d.name, sub: `Chart: Yahoo Finance · ${esc(d.t)} · price data only (no order flow)`, prec: ['US2Y', 'US10Y', 'US30Y'].includes(key) ? 3 : key === 'ETHBTC' ? 5 : 2 });
   } else {
     const m = S.byBase[key];
-    Object.assign(S, { sym: m.sym, base: m.base, prec: m.prec, title: key, sub: `Chart: Binance · ${esc(m.sym)} · ${m.quote} perpetual · live` });
+    Object.assign(S, { sym: m.sym, base: m.base, prec: m.prec, metal: !!m.metal,
+      title: m.metal ? `${METALS_NAME[key]} (${m.sym})` : key,
+      sub: m.metal ? `Chart: Binance · ${esc(m.sym)} · TradFi perpetual · live, 24/7 · price data only (no Coinalyze order flow)` : `Chart: Binance · ${esc(m.sym)} · ${m.quote} perpetual · live` });
     S.baseSub = S.sub;
   }
   renderQuick(); renderPanels(); updateStatus();
@@ -614,12 +624,11 @@ async function loadAsset(key) {
   loadChart(g);
   loadAnalysisBars(g, 'all');
   if (!S.tradfi) {
-    loadFlow(g);
-    loadOverview(g);
+    if (!S.metal) { loadFlow(g); loadOverview(g); }
     const tick = async () => { try { const t = await API.ticker24(S.sym); if (g === S.gen) { S.chg24 = +t.priceChangePercent; UI.renderHero(st(), S.r); } } catch (e) { /* ignore */ } };
     tick();
     every(tick, 60000);
-    every(() => loadFlow(g), 60000);
+    if (!S.metal) every(() => loadFlow(g), 60000);
     every(() => { if (cfg.tf !== cfg.ltf) loadAnalysisBars(g, 'ltf'); }, 30000);
   } else {
     every(() => loadAnalysisBars(g, 'ltf'), 30000);
@@ -899,6 +908,10 @@ async function start() {
   try {
     S.symbols = await API.binanceSymbols();
     S.symbols.forEach(s => { if (!S.byBase[s.base]) S.byBase[s.base] = s; });
+    // Gold and silver: use Binance's live TradFi perpetuals instead of delayed Yahoo futures when Binance lists them
+    for (const [k, b] of Object.entries(METALS)) {
+      if (S.byBase[b]) { S.byBase[k] = Object.assign({}, S.byBase[b], { metal: k }); delete API.TRADFI[k]; }
+    }
   } catch (e) {
     S.priceErr = 'Binance futures is not reachable from this network: ' + e.message;
     toast(esc(S.priceErr), 10000);

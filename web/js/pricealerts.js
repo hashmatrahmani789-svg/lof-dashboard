@@ -59,9 +59,9 @@ export function createAlerts(ctx) {
   }
   async function pollTradfi() {
     const cur = ctx.current();
-    const keys = [...new Set(active().filter(a => a.tradfi && a.key !== cur.key).map(a => a.key))];
-    for (const k of keys) {
-      try { const { bars } = await API.yahooRaw(ctx.tradfi[k].t, '1m', '1d'); const b = bars[bars.length - 1]; if (b) feed(k, b.c); } catch (e) { /* ignore */ }
+    const byKey = new Map(active().filter(a => a.tradfi && a.key !== cur.key).map(a => [a.key, a.sym]));
+    for (const [k, sym] of byKey) {
+      try { const { bars } = await API.yahooRaw(sym, '1m', '1d'); const b = bars[bars.length - 1]; if (b) feed(k, b.c); } catch (e) { /* ignore */ }
     }
   }
   let tgSync = 0;
@@ -119,7 +119,7 @@ export function createAlerts(ctx) {
       const out = Object.assign({}, a, { price, cond: $('#alCond').value, mode, msg: $('#alMsg').value.trim(), telegram: $('#alTg').checked,
         status: 'active', lastT: now, side: p0 != null ? (p0 >= lv ? 'above' : 'below') : (a.side || 'below') });
       if (p0 == null && !a.side) out.side = null;
-      if (!editing) { out.id = Math.random().toString(36).slice(2, 10) + now.toString(36); out.created = now; out.label = ctx.tradfi[a.key] ? ctx.tradfi[a.key].short : a.key; }
+      if (!editing) { out.id = Math.random().toString(36).slice(2, 10) + now.toString(36); out.created = now; out.label = ctx.tradfi[a.key] ? ctx.tradfi[a.key].short : ({ GOLD: 'Gold', SILVER: 'Silver' })[a.key] || a.key; }
       m.hidden = true;
       if (editing) { const i = list.findIndex(x => x.id === a.id); list[i] = out; remote({ action: 'update', id: out.id, patch: out }); }
       else { list.unshift(out); remote({ action: 'add', alert: out }); }
@@ -132,7 +132,7 @@ export function createAlerts(ctx) {
   async function seedSide(a) {
     try {
       let p;
-      if (a.tradfi) { const { bars } = await API.yahooRaw(ctx.tradfi[a.key].t, '1m', '1d'); p = bars[bars.length - 1].c; }
+      if (a.tradfi) { const { bars } = await API.yahooRaw(a.sym, '1m', '1d'); p = bars[bars.length - 1].c; }
       else p = (await API.allTickers())[a.sym].last;
       a.side = p >= levelAt(a, Date.now() / 1000) ? 'above' : 'below';
       remote({ action: 'update', id: a.id, patch: { side: a.side } }); saveLocal();

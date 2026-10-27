@@ -40,14 +40,15 @@ async function getJSON(url, opts = {}, timeout = 15000) {
 
 // ── Binance futures ─────────────────────────────────────────
 export async function binanceSymbols() {
-  const KEY = 'lof_bn_symbols_v1';
+  const KEY = 'lof_bn_symbols_v2';
   try {
     const c = JSON.parse(localStorage.getItem(KEY) || 'null');
     if (c && Date.now() - c.at < 12 * 3600e3 && c.list.length) return c.list;
   } catch (e) { /* ignore */ }
   const j = await getJSON(FAPI + '/fapi/v1/exchangeInfo');
   const list = j.symbols
-    .filter(s => s.contractType === 'PERPETUAL' && s.status === 'TRADING' && (s.quoteAsset === 'USDT' || s.quoteAsset === 'USDC'))
+    // PERPETUAL plus Binance TradFi perpetuals (gold XAUUSDT, silver XAGUSDT)
+    .filter(s => /PERPETUAL/.test(s.contractType || '') && s.status === 'TRADING' && (s.quoteAsset === 'USDT' || s.quoteAsset === 'USDC'))
     .map(s => {
       const tick = (s.filters.find(f => f.filterType === 'PRICE_FILTER') || {}).tickSize || '0.01';
       const prec = tick.includes('.') ? tick.replace(/0+$/, '').split('.')[1].length : 0;
