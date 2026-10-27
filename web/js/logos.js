@@ -9,7 +9,10 @@ const listeners = [];
 export const onLogos = fn => listeners.push(fn);
 
 const MACRO = { GOLD: ['Au', '#c9a227'], SILVER: ['Ag', '#9ea7b3'], SPX: ['S&P', '#1e88e5'], NDX: ['NQ', '#5e35b1'], DXY: ['$', '#2e7d32'],
-  US2Y: ['2Y', '#6d4c41'], US10Y: ['10Y', '#6d4c41'], US30Y: ['30Y', '#6d4c41'], VIX: ['VIX', '#c62828'], OIL: ['OIL', '#37474f'], ETHBTC: ['Ξ/₿', '#546e7a'] };
+  US2Y: ['2Y', '#6d4c41'], US10Y: ['10Y', '#6d4c41'], US30Y: ['30Y', '#6d4c41'], VIX: ['VIX', '#c62828'], OIL: ['OIL', '#37474f'], ETHBTC: ['Ξ/₿', '#546e7a'],
+  TOTAL: ['ALL', '#00897b'], TOTAL2: ['T2', '#00897b'], TOTAL3: ['T3', '#00897b'] };
+// dominance rows use the coin's own logo
+const ALIAS = { BTCD: 'BTC', ETHD: 'ETH', USDTD: 'USDT' };
 const bare = k => String(k).replace(/^(1000000|100000|10000|1000|1M)(?=[A-Z])/, '').toUpperCase();
 const hue = k => [...k].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
 
@@ -31,7 +34,7 @@ export async function loadLogos() {
 
 // html for a round logo; falls back to a coloured letter
 export function logo(key, size = 18) {
-  const k = String(key || ''), st = `width:${size}px;height:${size}px;flex:0 0 ${size}px`;
+  const k = ALIAS[key] || String(key || ''), st = `width:${size}px;height:${size}px;flex:0 0 ${size}px`;
   if (MACRO[k]) { const [t, c] = MACRO[k]; return `<b class="logo ltxt" style="${st};background:${c};font-size:${Math.max(7, size * (t.length > 2 ? 0.36 : 0.5))}px">${esc(t)}</b>`; }
   const url = MAP[bare(k)];
   if (url) return `<img class="logo" src="${esc(url)}" alt="" loading="lazy" style="${st}" onerror="this.replaceWith(Object.assign(document.createElement('b'),{className:'logo ltxt',textContent:'${esc(bare(k)[0] || '?')}',style:'${st};background:hsl(${hue(k)} 55% 45%);font-size:${size * 0.55}px'}))">`;

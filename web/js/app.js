@@ -44,7 +44,7 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.14';
+const VERSION = 'v8.15';
 const METALS = { GOLD: 'XAU', SILVER: 'XAG' };
 const METALS_NAME = { GOLD: 'Gold', SILVER: 'Silver' };
 let cfg;
