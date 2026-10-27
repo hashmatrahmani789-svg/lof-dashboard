@@ -73,7 +73,7 @@ async function watchlist() {
   try {
     const L = await getKey('lists', null), v = L && L.value;
     if (v && v.lists && v.lists[v.scan]) {
-      const items = v.lists[v.scan].items.filter(k => /^[A-Z0-9]+$/.test(k) && !['GOLD', 'SILVER', 'SPX', 'NDX', 'DXY', 'US2Y', 'US10Y', 'US30Y', 'VIX', 'OIL', 'ETHBTC'].includes(k));
+      const items = v.lists[v.scan].items.filter(k => /^[A-Z0-9]+$/.test(k) && !['GOLD', 'SILVER', 'SPX', 'NDX', 'DXY', 'US2Y', 'US10Y', 'US30Y', 'VIX', 'OIL', 'ETHBTC', 'BTCD', 'ETHD', 'USDTD', 'TOTAL', 'TOTAL2', 'TOTAL3'].includes(k));
       if (items.length) return items.slice(0, 25);
     }
   } catch (e) { /* fall back */ }

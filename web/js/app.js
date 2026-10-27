@@ -44,7 +44,7 @@ const DEFAULTS = {
   layout: 1, cells: [{ coin: 'ETH', tf: '1h' }, { coin: 'SOL', tf: '15m' }, { coin: 'BTC', tf: '4h' }],
 };
 const CFG_KEY = 'lof_cfg_v2';
-const VERSION = 'v8.13';
+const VERSION = 'v8.14';
 const METALS = { GOLD: 'XAU', SILVER: 'XAG' };
 const METALS_NAME = { GOLD: 'Gold', SILVER: 'Silver' };
 let cfg;
@@ -84,7 +84,40 @@ const every = (fn, ms, list = S.timers) => list.push(setInterval(fn, ms));
 const clearTimers = list => { list.forEach(clearInterval); list.length = 0; };
 const isCryptoKey = k => !API.TRADFI[k] && !!S.byBase[k];
 let WL = null, AL = null, CAL = null;
-const watchKeys = () => (WL ? WL.keys() : cfg.watch).filter(k => API.TRADFI[k] || S.byBase[k] || !S.symbols.length);
+// header chips: tradable assets of the active watchlist (macro and crypto market metrics stay in the watchlist only)
+const watchKeys = () => (WL ? WL.keys() : cfg.watch).filter(k => !API.METRICS[k] && !API.PULSE_KEYS.includes(k) && (API.TRADFI[k] || S.byBase[k] || !S.symbols.length));
+// screener: its own coin list
+const scanKeys = () => (WL ? WL.scanner() : cfg.watch).filter(k => API.TRADFI[k] || S.byBase[k]);
+function openPulse() {
+  const b = $('#tabs [data-tab="pulse"]'); if (b) b.click();
+  const c = $('#tabsCard'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function metricOf(k) {
+  const d = API.METRICS[k], p = S.pulse;
+  if (!d || !p || !p.crypto || p.crypto[d.pk] == null) return null;
+  const h = (p.hist || {})[d.pk] || {};
+  return { value: p.crypto[d.pk], chg: d.pk === 'total' ? p.crypto.chg : h.chg };
+}
+// ── screener coin editor ────────────────────────────────────
+function renderScanEdit() {
+  const el = $('#scanEdit'); if (!el || !WL) return;
+  const keys = WL.scanner();
+  el.innerHTML = `<div class="scan-edit"><span class="muted">Screener coins (${keys.length}):</span>
+    ${keys.map(k => `<span class="chip" data-k="${esc(k)}">${logo(k, 14)}${esc(METALS_NAME[k] || (API.TRADFI[k] ? API.TRADFI[k].short : k))}<b class="x" data-rm="${esc(k)}" title="Remove">✕</b></span>`).join('')}
+    <input id="scanAdd" list="miniSyms" placeholder="Add coin, e.g. SOL" spellcheck="false" autocomplete="off"><button class="btn" id="scanAddBtn">＋ Add</button></div>`;
+  const add = () => {
+    const inp = $('#scanAdd'), raw = inp.value.trim().toUpperCase().replace(/USDT$/, '');
+    if (!raw) return;
+    const k = S.byBase[raw] || API.TRADFI[raw] ? raw : null;
+    if (!k) { toast(`${esc(raw)} isn't on Binance futures.`); return; }
+    if (keys.includes(k)) { inp.value = ''; return; }
+    WL.setScanner(keys.concat(k));
+  };
+  $('#scanAddBtn').onclick = add;
+  $('#scanAdd').onkeydown = e => { if (e.key === 'Enter') add(); };
+  el.querySelectorAll('[data-rm]').forEach(b => b.onclick = e => { e.stopPropagation(); WL.setScanner(keys.filter(x => x !== b.dataset.rm)); });
+  el.querySelectorAll('.chip[data-k]').forEach(c => c.onclick = () => loadAsset(c.dataset.k));
+}
 
 // ── search ──────────────────────────────────────────────────
 function allAssets() {
@@ -765,11 +798,11 @@ let scanning = false;
 async function runScan() {
   if (scanning || !S.symbols.length) return;
   scanning = true;
-  const keys = watchKeys().filter(k => API.TRADFI[k] || S.byBase[k]);
+  const keys = scanKeys();
   let prem = {};
   try { prem = await API.premiumAll(); } catch (e) { /* ignore */ }
   const out = [];
-  const status = () => `Watchlist scan · ${out.length}/${keys.length} · entry TF ${cfg.ltf}${S.scanAt ? ' · last full scan ' + new Date(S.scanAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''} · list: ${esc(WL ? $('#wlName').textContent.replace('▾', '').trim() : 'Main')} (switch it in the watchlist panel)`;
+  const status = () => `Screener · ${out.length}/${keys.length} · entry TF ${cfg.ltf}${S.scanAt ? ' · last full scan ' + new Date(S.scanAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`;
   const q = keys.slice();
   async function worker() {
     while (q.length) {
@@ -817,7 +850,7 @@ function openSettings() {
     <div class="field"><span>Browser notification</span><input type="checkbox" id="aBrowser" ${cfg.alerts.browser ? 'checked' : ''}></div>
     <div class="field"><span>Telegram ${sv.telegram ? '' : '<span class="muted">(not set up, see README)</span>'}</span><input type="checkbox" id="aTg" ${cfg.alerts.telegram ? 'checked' : ''} ${sv.telegram ? '' : 'disabled'}></div>
     <div class="field"><button class="btn" id="aTest" ${sv.telegram ? '' : 'disabled'}>Send test message</button></div>
-    <div class="muted" style="font-size:11.5px">Alerts run while the dashboard is open (phone or PC). The screener checks your watchlist every 3 minutes.</div>
+    <div class="muted" style="font-size:11.5px">Alerts run while the dashboard is open (phone or PC). The screener checks its own coin list (Screener tab) every 3 minutes.</div>
     ${S.tradfi ? '' : `<h4>Coin info</h4><div class="field"><span>CoinGecko ID for ${esc(S.asset)}</span><input type="text" id="cgId" placeholder="auto" value="${esc(cfg.cgId[S.asset] || '')}"></div>`}
     <h4>Setup</h4>
     <div class="muted" style="line-height:1.7">Coinalyze: ${sv.coinalyze ? '<span class="up">connected</span>' : '<span class="dn">missing key</span>'} · Telegram: ${sv.telegram ? '<span class="up">set up</span>' : 'not set up'} · Notion journal: ${sv.notion ? '<span class="up">set up</span>' : 'not set up'}</div>
@@ -917,8 +950,10 @@ async function start() {
     toast(esc(S.priceErr), 10000);
   }
   const scanByKey = () => Object.fromEntries(S.scan.map(x => [x.key, x.r]));
-  WL = createWatchlist({ byBase: () => S.byBase, tradfi: API.TRADFI, onPick: k => loadAsset(k), current: () => S.asset, fallbackWatch: cfg.watch,
-    scanInfo: k => scanByKey()[k], onChange: () => { renderQuick(); clearTimeout(S.wlScan); S.wlScan = setTimeout(runScan, 1500); } });
+  WL = createWatchlist({ byBase: () => S.byBase, tradfi: API.TRADFI, onPick: k => API.METRICS[k] ? openPulse() : loadAsset(k), current: () => S.asset, fallbackWatch: cfg.watch,
+    scanInfo: k => scanByKey()[k], metric: metricOf, onChange: () => renderQuick(),
+    onScanner: () => { renderScanEdit(); S.scan = S.scan.filter(x => WL.scanner().includes(x.key)); X.renderScreener(S.scan, S.asset, loadAsset, 'Screener · updating…'); clearTimeout(S.wlScan); S.wlScan = setTimeout(runScan, 1200); } });
+  renderScanEdit();
   AL = createAlerts({ byBase: () => S.byBase, tradfi: API.TRADFI, server: () => S.server, onPick: k => loadAsset(k),
     current: () => ({ key: S.asset, sym: S.sym, tradfi: S.tradfi, prec: S.prec, price: S.chartBars.length ? S.chartBars[S.chartBars.length - 1].c : (S.r ? S.r.price : NaN) }),
     onChange: () => { if (S.chart) S.chart.setAlerts(AL.forKey(S.asset)); MINIS.forEach(m => m.setAlerts()); } });
@@ -929,11 +964,11 @@ async function start() {
   window.addEventListener('resize', () => { clearTimeout(S.rsz); S.rsz = setTimeout(() => sizeGrid(chartPanes().length), 200); });
   const fromHash = decodeURIComponent(location.hash.slice(1) || '');
   loadAsset(fromHash && (API.TRADFI[fromHash] || S.byBase[fromHash]) ? fromHash : (API.TRADFI[cfg.asset] || S.byBase[cfg.asset] ? cfg.asset : (S.symbols.length ? 'BTC' : 'GOLD')));
-  X.renderScreener([], S.asset, loadAsset, 'Scanning watchlist…');
+  X.renderScreener([], S.asset, loadAsset, 'Scanning screener coins…');
   setTimeout(runScan, 2500);
   setInterval(() => { if (document.visibilityState === 'visible' || cfg.alerts.browser || cfg.alerts.telegram) runScan(); }, 180000);
-  X.renderPulse(null, loadAsset); X.renderStrip(null, loadAsset);
-  const pulse = () => X.loadPulse().then(p => { X.renderPulse(p, loadAsset); X.renderStrip(p, loadAsset); }).catch(() => {});
+  X.renderPulse(null, loadAsset);
+  const pulse = () => X.loadPulse().then(p => { S.pulse = p; X.renderPulse(p, loadAsset); if (WL) WL.render(); }).catch(() => {});
   setTimeout(pulse, 1500); setInterval(pulse, 300000);
   const evalH = async () => { const h = await X.evaluateHistory(); if (!$('#tab-history').hidden) X.renderHistory(h, loadAsset); };
   setTimeout(evalH, 8000); setInterval(evalH, 300000);

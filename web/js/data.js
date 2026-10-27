@@ -21,6 +21,17 @@ export const TRADFI = {
   ETHBTC: { t: 'ETH-BTC', name: 'ETH / BTC', short: 'ETH/BTC', kind: 'ratio' },
 };
 export const PULSE_KEYS = ['DXY', 'US2Y', 'US10Y', 'US30Y', 'VIX', 'OIL', 'ETHBTC'];
+// Crypto market metrics from CoinGecko (Market Pulse). Shown in the watchlist; no chart of their own.
+export const METRICS = {
+  BTCD: { short: 'BTC.D', name: 'Bitcoin dominance', pk: 'btc_d', pct: true },
+  ETHD: { short: 'ETH.D', name: 'Ethereum dominance', pk: 'eth_d', pct: true },
+  USDTD: { short: 'USDT.D', name: 'USDT dominance (up = risk-off)', pk: 'usdt_d', pct: true },
+  TOTAL: { short: 'TOTAL', name: 'Crypto market cap', pk: 'total' },
+  TOTAL2: { short: 'TOTAL2', name: 'Market cap ex BTC', pk: 'total2' },
+  TOTAL3: { short: 'TOTAL3', name: 'Market cap ex BTC and ETH', pk: 'total3' },
+};
+// added once to the "Main" watchlist (v8.14)
+export const MACRO_KEYS = ['DXY', 'US10Y', 'US30Y', 'VIX', 'OIL', 'ETHBTC', 'BTCD', 'ETHD', 'USDTD', 'TOTAL', 'TOTAL2', 'TOTAL3'];
 
 async function getJSON(url, opts = {}, timeout = 15000) {
   const ctl = new AbortController();

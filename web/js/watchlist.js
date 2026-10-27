@@ -1,14 +1,15 @@
 // TradingView-style watchlist: several lists, unlimited symbols, live last / change / volume, drag to reorder.
 // Lists are saved in this browser and synced to the cloud when storage is connected (same lists on phone and PC).
+// Also holds the screener's own coin list (W.scanner), so it syncs the same way.
 import * as API from './data.js';
-import { esc, fp, fpct, toast, $ } from './ui.js';
+import { esc, fp, fpct, fusd, toast, $ } from './ui.js';
 import { logo, onLogos } from './logos.js';
 
 const KEY = 'lof_wl_v1';
 const CRYPTO_DEFAULT = ['BTC', 'ETH', 'ZEC', 'NEAR', 'VVV', 'HYPE', 'SOL', 'SUI', 'TAO', 'LINK'];
 
 export function createWatchlist(ctx) {
-  // ctx: { byBase(), tradfi, onPick(key), current(), scanInfo(key), fallbackWatch, onChange() }
+  // ctx: { byBase(), tradfi, onPick(key), current(), scanInfo(key), metric(key), fallbackWatch, onChange(), onScanner() }
   let W;
   try { W = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { W = null; }
   if (!W || !Array.isArray(W.lists) || !W.lists.length) {
@@ -16,6 +17,24 @@ export function createWatchlist(ctx) {
       active: 0, scan: 1, at: 0 };
   }
   let prices = {}, prev = {}, sortBy = null, sortDir = -1, cloud = false, pushTimer = null, dragKey = null;
+
+  const isMacro = k => !!API.METRICS[k] || API.PULSE_KEYS.includes(k);
+  // one-time upgrades: macro + crypto market metrics into "Main"; screener gets its own coin list
+  function migrate() {
+    let changed = false;
+    if (W.mig !== 2) {
+      const main = W.lists.find(l => /^main$/i.test(l.name)) || W.lists[0];
+      API.MACRO_KEYS.forEach(k => { if (!main.items.includes(k)) main.items.push(k); });
+      W.mig = 2; changed = true;
+    }
+    if (!Array.isArray(W.scanner)) {
+      const src = (W.lists[W.scan] || W.lists[0]).items;
+      W.scanner = src.filter(k => !isMacro(k) && !ctx.tradfi[k]).slice(0, 40);
+      if (!W.scanner.length) W.scanner = ['BTC', 'ETH', 'SOL'];
+      changed = true;
+    }
+    return changed;
+  }
 
   const list = () => W.lists[W.active] || W.lists[0];
   const items = () => list().items;
@@ -25,8 +44,9 @@ export function createWatchlist(ctx) {
     if (push && cloud) { clearTimeout(pushTimer); pushTimer = setTimeout(() => API.storePut('lists', W).catch(() => {}), 800); }
     ctx.onChange && ctx.onChange();
   }
+  if (migrate()) save(false);
 
-  // ── prices: all Binance futures in one call every 4 s; macro / futures from Yahoo every 60 s
+  // ── prices: all Binance futures in one call every 4 s; macro / futures from Yahoo every 60 s; crypto metrics from Market Pulse
   async function pollCrypto() {
     try {
       const t = await API.allTickers();
@@ -43,11 +63,13 @@ export function createWatchlist(ctx) {
     const keys = [...new Set(W.lists.flatMap(l => l.items))].filter(k => ctx.tradfi[k]);
     await Promise.all(keys.map(async k => {
       try {
-        const { bars } = await API.yahooRaw(ctx.tradfi[k].t, '1d', '5d');
+        const def = ctx.tradfi[k];
+        const { bars } = await API.yahooRaw(def.t, '1d', '5d');
         if (bars.length < 2) return;
         const a = bars[bars.length - 1], b = bars[bars.length - 2];
         prev[k] = prices[k] ? prices[k].last : null;
-        prices[k] = { last: a.c, chg: (a.c / b.c - 1) * 100, vol: a.v };
+        prices[k] = def.kind === 'yield' ? { last: a.c, chg: (a.c - b.c) * 100, unit: 'bp', sfx: '%' }
+          : { last: a.c, chg: (a.c / b.c - 1) * 100, vol: def.kind ? 0 : a.v, prec: def.kind === 'ratio' ? 5 : def.kind ? 2 : undefined };
       } catch (e) { /* ignore */ }
     }));
     render();
@@ -55,27 +77,37 @@ export function createWatchlist(ctx) {
 
   // ── rendering
   const panel = $('#wlPanel');
-  const label = k => ctx.tradfi[k] ? ctx.tradfi[k].short : ({ GOLD: 'Gold', SILVER: 'Silver' })[k] || k;
-  const hue = k => [...k].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+  const label = k => API.METRICS[k] ? API.METRICS[k].short : ctx.tradfi[k] ? ctx.tradfi[k].short : ({ GOLD: 'Gold', SILVER: 'Silver' })[k] || k;
   const vol = v => !v ? '' : v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : v.toFixed(0);
+  const priceOf = k => {
+    if (API.METRICS[k]) {
+      const m = ctx.metric && ctx.metric(k); if (!m || m.value == null) return null;
+      return { last: m.value, chg: m.chg, unit: API.METRICS[k].pct ? 'pts' : '%', txt: API.METRICS[k].pct ? m.value.toFixed(2) + '%' : fusd(m.value) };
+    }
+    return prices[k];
+  };
+  const chgTxt = p => !p || p.chg == null || !isFinite(p.chg) ? '' : p.unit === 'bp' ? `${p.chg > 0 ? '+' : ''}${p.chg.toFixed(1)}bp`
+    : p.unit === 'pts' ? `${p.chg > 0 ? '+' : ''}${p.chg.toFixed(2)}` : fpct(p.chg);
+  const lastTxt = p => p.txt || fp(p.last, p.prec) + (p.sfx || '');
   function render() {
     if (!panel) return;
     $('#wlName').innerHTML = `${esc(list().name)} <span class="muted">▾</span>`;
     let keys = items().slice();
     if (sortBy) {
-      const val = k => sortBy === 'sym' ? k : prices[k] ? prices[k][sortBy] : -Infinity;
+      const val = k => sortBy === 'sym' ? k : priceOf(k) ? priceOf(k)[sortBy] : -Infinity;
       keys.sort((a, b) => sortBy === 'sym' ? sortDir * a.localeCompare(b) : sortDir * ((val(a) || 0) - (val(b) || 0)));
     }
     panel.querySelectorAll('.wl-cols [data-s]').forEach(h => { h.dataset.arrow = h.dataset.s === sortBy ? (sortDir > 0 ? '↑' : '↓') : ''; });
     const cur = ctx.current();
     $('#wlRows').innerHTML = keys.length ? keys.map(k => {
-      const p = prices[k], info = ctx.scanInfo(k);
-      const flash = p && prev[k] != null && p.last !== prev[k] ? (p.last > prev[k] ? 'fu' : 'fd') : '';
+      const p = priceOf(k), info = ctx.scanInfo(k);
+      const flash = p && !API.METRICS[k] && prev[k] != null && p.last !== prev[k] ? (p.last > prev[k] ? 'fu' : 'fd') : '';
       const sig = !info ? '' : info.decision !== 'WAIT' ? `<i class="sig ${info.decision === 'LONG' ? 'l' : 's'}" title="${info.decision} READY · ${esc(info.setup)}"></i>` : info.setup !== 'NONE' ? '<i class="sig w" title="Setup forming"></i>' : '';
-      return `<div class="wl-row ${k === cur ? 'on' : ''}" draggable="${sortBy ? 'false' : 'true'}" data-k="${esc(k)}">
+      const tip = API.METRICS[k] ? API.METRICS[k].name + ' (CoinGecko) · click to open Market Pulse' : ctx.tradfi[k] ? ctx.tradfi[k].name : '';
+      return `<div class="wl-row ${k === cur ? 'on' : ''}" draggable="${sortBy ? 'false' : 'true'}" data-k="${esc(k)}" ${tip ? `title="${esc(tip)}"` : ''}>
         <span class="sym">${logo(k, 18)}${esc(label(k))}${sig}</span>
-        <span class="num ${flash}">${p ? fp(p.last) : '…'}</span>
-        <span class="num ${p ? (p.chg >= 0 ? 'up' : 'dn') : ''}">${p ? fpct(p.chg) : ''}</span>
+        <span class="num ${flash}">${p ? lastTxt(p) : '…'}</span>
+        <span class="num ${p ? (p.chg >= 0 ? 'up' : 'dn') : ''}">${chgTxt(p)}</span>
         <span class="num muted">${p ? vol(p.vol) : ''}</span>
         <button class="rm" data-rm="${esc(k)}" title="Remove">✕</button></div>`;
     }).join('') : '<div class="empty">Empty list. Click ＋ to add symbols.</div>';
@@ -118,16 +150,24 @@ export function createWatchlist(ctx) {
     if (box.hidden) return;
     inp.value = ''; res.innerHTML = ''; inp.focus();
     inp.oninput = () => {
-      const v = inp.value.trim().toUpperCase(); if (!v) { res.innerHTML = ''; return; }
-      const all = Object.keys(ctx.tradfi).map(k => [k, ctx.tradfi[k].name]).concat(Object.values(ctx.byBase()).map(s => [s.base, s.sym]));
+      const v = inp.value.trim().toUpperCase().replace('.', ''); if (!v) { res.innerHTML = ''; return; }
+      const all = Object.keys(API.METRICS).map(k => [k, API.METRICS[k].name])
+        .concat(Object.keys(ctx.tradfi).map(k => [k, ctx.tradfi[k].name])).concat(Object.values(ctx.byBase()).map(s => [s.base, s.sym]));
       const hits = all.filter(([k, n]) => k.startsWith(v) || k.replace(/^1000+/, '').startsWith(v) || n.toUpperCase().includes(v))
         .sort((x, y) => (y[0] === v) - (x[0] === v) || x[0].length - y[0].length).slice(0, 12);
-      res.innerHTML = hits.map(([k, n]) => `<div class="it" data-k="${esc(k)}"><b>${esc(k)}</b> <small>${esc(n)}</small><span>${items().includes(k) ? '✓' : '＋'}</span></div>`).join('') || '<div class="it muted">No match</div>';
+      res.innerHTML = hits.map(([k, n]) => `<div class="it" data-k="${esc(k)}"><b>${esc(label(k))}</b> <small>${esc(n)}</small><span>${items().includes(k) ? '✓' : '＋'}</span></div>`).join('') || '<div class="it muted">No match</div>';
       res.querySelectorAll('[data-k]').forEach(d => d.onclick = () => { add(d.dataset.k); inp.oninput(); });
     };
     inp.onkeydown = e => { if (e.key === 'Enter') { const f = res.querySelector('[data-k]'); if (f) { add(f.dataset.k); inp.value = ''; res.innerHTML = ''; } } if (e.key === 'Escape') box.hidden = true; };
   }
   function add(k) { if (!items().includes(k)) { items().push(k); save(); render(); pollCrypto(); pollTradfi(); } }
+
+  // ── screener coin list
+  function setScanner(keys) {
+    W.scanner = [...new Set(keys)].slice(0, 60);
+    save();
+    ctx.onScanner && ctx.onScanner();
+  }
 
   if (panel) {
     $('#wlName').onclick = menu;
@@ -144,7 +184,15 @@ export function createWatchlist(ctx) {
     try {
       const j = await API.storeGet('lists');
       cloud = !!j.enabled;
-      if (cloud && j.value && j.value.lists && (j.value.at || 0) > (W.at || 0)) { W = Object.assign(W, j.value); save(false); render(); }
+      if (cloud && j.value && j.value.lists && (j.value.at || 0) > (W.at || 0)) {
+        const before = JSON.stringify(W.scanner);
+        W = Object.assign(W, j.value);
+        if (j.value.mig !== 2) W.mig = 0;
+        if (!Array.isArray(j.value.scanner)) delete W.scanner;
+        const changed = migrate();
+        save(changed); render();
+        if (JSON.stringify(W.scanner) !== before) ctx.onScanner && ctx.onScanner();
+      }
       else if (cloud && (!j.value || (W.at || 0) > (j.value.at || 0))) API.storePut('lists', W).catch(() => {});
     } catch (e) { cloud = false; }
   }
@@ -158,6 +206,8 @@ export function createWatchlist(ctx) {
   return {
     keys: () => items().slice(),
     allKeys: () => [...new Set(W.lists.flatMap(l => l.items))],
+    scanner: () => (W.scanner || []).slice(),
+    setScanner,
     price: k => prices[k],
     prices: () => prices,
     render, add,

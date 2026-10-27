@@ -421,3 +421,10 @@ td.symc .logo { margin-right: 6px; }
   .lc-top { right: 70px; }
   .menu .pop { position: fixed; left: 10px; right: 10px; top: 120px; width: auto; }
 }
+
+/* v8.14 screener coin editor */
+.scan-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.scan-edit .chip { cursor: pointer; }
+.scan-edit .chip .x { margin-left: 4px; font-weight: 400; opacity: .55; cursor: pointer; }
+.scan-edit .chip .x:hover { opacity: 1; color: var(--dn, #ef5350); }
+.scan-edit input { width: 150px; background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12.5px; }

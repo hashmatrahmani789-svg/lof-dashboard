@@ -30,7 +30,7 @@ export async function scanAsset(key, isCrypto, sym, ltf, params, prem) {
 
 let sortKey = 'rank', sortDir = 1;
 export function renderScreener(rows, cur, onPick, status) {
-  const el = $('#tab-screener');
+  const el = $('#scanBody') || $('#tab-screener');
   const rank = x => (x.r.decision !== 'WAIT' ? 0 : x.r.setup !== 'NONE' ? 1 : 2) * 100 - x.r.score;
   const keyFn = {
     rank, asset: x => x.key, chg: x => -(x.chg24 || 0), score: x => -x.r.score, oi: x => -(Math.abs(x.oi4) || 0),
