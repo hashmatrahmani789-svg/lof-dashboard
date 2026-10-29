@@ -156,13 +156,20 @@ export function makeIndicators(C, V, cfg, colors) {
 }
 
 // ── Fair value gaps (3-candle imbalance). Returns open gaps and recently filled ones.
+// Non-repainting: a gap is only confirmed once candle 3 has CLOSED (the live last candle is never used to form one),
+// the size filter uses only candles before the gap, and the box edges never change after confirmation.
+// The box ends when price trades through the far edge (fully filled).
 export function fairValueGaps(C, maxOpen = 20) {
-  const N = C.length, a = Math.max(2, N - 600), out = [];
-  if (N < 5) return out;
-  let avg = 0; for (let i = Math.max(1, N - 100); i < N; i++) avg += C[i].high - C[i].low; avg /= Math.min(99, N - 1);
-  const minGap = avg * 0.15;
-  for (let i = a; i < N; i++) {
+  const N = C.length, last = N - 2, out = [];          // C[N-1] is the live candle; last closed = N-2
+  if (N < 6) return out;
+  const a = Math.max(2, last - 600);
+  for (let i = a; i <= last; i++) {
     const p = C[i - 2], c = C[i];
+    // size filter from the 100 candles BEFORE the gap, so it is fixed for this gap forever
+    const s0 = Math.max(0, i - 102), s1 = i - 2;
+    if (s1 - s0 < 10) continue;
+    let avg = 0; for (let k = s0; k < s1; k++) avg += C[k].high - C[k].low; avg /= (s1 - s0);
+    const minGap = avg * 0.15;
     let g = null;
     if (c.low > p.high && c.low - p.high >= minGap) g = { bull: true, top: c.low, bot: p.high };
     else if (c.high < p.low && p.low - c.high >= minGap) g = { bull: false, top: p.low, bot: c.high };
@@ -170,7 +177,6 @@ export function fairValueGaps(C, maxOpen = 20) {
     g.t = C[i - 1].time; g.end = null;
     for (let j = i + 1; j < N; j++) {
       if (g.bull ? C[j].low <= g.bot : C[j].high >= g.top) { g.end = C[j].time; g.ej = j; break; }
-      if (g.bull) g.top = Math.min(g.top, Math.max(g.bot, C[j].low)); else g.bot = Math.max(g.bot, Math.min(g.top, C[j].high));
     }
     if (g.end == null || N - g.ej < 40) out.push(g);
   }
