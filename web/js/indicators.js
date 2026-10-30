@@ -175,8 +175,9 @@ export function fairValueGaps(C, maxOpen = 20) {
     else if (c.high < p.low && p.low - c.high >= minGap) g = { bull: false, top: p.low, bot: c.high };
     if (!g) continue;
     g.t = C[i - 1].time; g.end = null;
-    for (let j = i + 1; j < N; j++) {
-      if (g.bull ? C[j].low <= g.bot : C[j].high >= g.top) { g.end = C[j].time; g.ej = j; break; }
+    // failed = a CLOSED candle closes fully beyond the far edge (wicks / half fills keep the box)
+    for (let j = i + 1; j <= last; j++) {
+      if (g.bull ? C[j].close < g.bot : C[j].close > g.top) { g.end = C[j].time; g.ej = j; break; }
     }
     if (g.end == null) out.push(g);   // filled (failed) gaps are removed from the chart
   }
