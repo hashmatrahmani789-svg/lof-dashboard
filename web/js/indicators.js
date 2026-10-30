@@ -178,7 +178,7 @@ export function fairValueGaps(C, maxOpen = 20) {
     for (let j = i + 1; j < N; j++) {
       if (g.bull ? C[j].low <= g.bot : C[j].high >= g.top) { g.end = C[j].time; g.ej = j; break; }
     }
-    if (g.end == null || N - g.ej < 40) out.push(g);
+    if (g.end == null) out.push(g);   // filled (failed) gaps are removed from the chart
   }
   const open = out.filter(g => g.end == null).slice(-maxOpen), filled = out.filter(g => g.end != null).slice(-maxOpen);
   return open.concat(filled);
